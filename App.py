@@ -143,9 +143,9 @@ for idx, scene in enumerate(scenarios):
         # Breakdown
         st.caption(f"**Requested Pipeline Telemetry (Pre-Clip):**")
         
-        # Dynamic warning to explain the math discrepancy during clipping
+        # DYNAMIC WARNING EXPLAINING MECHANICAL OVERHEAD
         if res["hw_clip"]:
-            st.caption("*Note: The requested forces below exceed the motor's budget. The delivered feedback metric above is capped.*")
+            st.caption(f"⚠️ *Note: The motor is operating at 100% capacity. The delivered feedback is what is left over after {res['total_tax']:.2f} Nm is consumed by internal resistance (damping, friction, and inertia).*")
             
         st.caption(f"↳ Game Output Signal: **{res['acc_signal']*100:.0f}%**")
         st.caption(f"↳ Req. Base Corner Force: **{res['dsp_sustained']:.2f} Nm**")
