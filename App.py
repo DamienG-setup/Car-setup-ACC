@@ -1,362 +1,127 @@
 import streamlit as st
-import plotly.graph_objects as go
 
-# Configure page viewport properties
+# Configure the page properties
 st.set_page_config(
-    page_title="GT3 Advanced Setup Sandbox",
-    layout="centered",
-    initial_sidebar_state="collapsed"
+    page_title="Moza R3 ACC Force Calculator",
+    page_icon="🏎️",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Custom premium styling matching the targeted reference layout
+# App Titles and Descriptions
+st.title("🏎️ Moza R3 & ACC Force Physics Calculator")
 st.markdown("""
-    <style>
-    .main .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 550px; }
-    h1 { text-align: center; font-family: 'Helvetica Neue', Arial, sans-serif; font-weight: 600; color: #111; margin-bottom: 0.1rem; font-size: 1.6rem; }
-    .subtitle { text-align: center; font-family: monospace; color: #666; margin-bottom: 1.5rem; font-size: 0.8rem; letter-spacing: 1px; }
-    
-    /* SCROLL HIGHWAY: Reserves an 18% interactive gutter on the right side for safe mobile scrolling */
-    div[data-testid="stSlider"] { 
-        padding-right: 18% !important; 
-        margin-bottom: 8px;
-    }
-    
-    .status-card {
-        background-color: #ffffff;
-        border-radius: 8px;
-        padding: 14px;
-        text-align: center;
-        margin-top: 15px;
-        margin-bottom: 15px;
-        border: 1px solid #eaeaea;
-    }
-    .status-title { font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 1.2px; font-weight: 500; }
-    .status-value { font-size: 1.1rem; font-weight: 400; color: #222; margin-top: 4px; font-family: monospace; }
-    .section-header { font-size: 0.95rem; font-weight: 600; color: #111; margin-top: 20px; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 4px; }
-    </style>
-""", unsafe_allow_html=True)
-
-st.markdown("<h1>Car Setup Balance Simulator</h1>", unsafe_allow_html=True)
-st.markdown("<div class='subtitle'>GT3 TELEMETRY ENGINE v4.0 (INTEGRATED RAKE)</div>", unsafe_allow_html=True)
-
-# --- RIGOROUS VEHICLE DYNAMICS PHYSICS CALCULATOR ---
-def calculate_physics(setup):
-    # Base outputs initialization
-    entry_rot = 0.0
-    entry_stab = 0.0
-    mid_und = 0.0
-    mid_ove = 0.0
-    exit_trac = 0.0
-    brake_perf = 0.0
-    straight_spd = 0.0
-    hs_stab = 0.0
-    aero_drag = 0.0
-
-    # 1. Dynamic Ride Height, CoG, & Aero Rake Matrix
-    # Dynamic Rake calculation: Rear Height minus Front Height
-    computed_rake = setup["Rear Ride Height"] - setup["Front Ride Height"]
-    # Lower baseline height calculation (reversing values so negative/lower = lower CoG)
-    overall_lowering = -(setup["Front Ride Height"] + setup["Rear Ride Height"]) / 2.0
-
-    # CoG & Ground Effect Impacts from Lowering
-    brake_perf += overall_lowering * 4.5    # Lower CoG stabilizes dynamic longitudinal pitch matrix
-    straight_spd += overall_lowering * 2.0  # Cleaner floor profiling drops parasitic cross-section drag
-    hs_stab += overall_lowering * 1.5
-
-    # Compute Aerodynamic Rake Angle Shifts
-    if computed_rake >= 0:
-        entry_rot += computed_rake * 4.5
-        entry_stab -= computed_rake * 3.5   # Light tail physics profile under deceleration transitions
-        mid_und -= computed_rake * 3.0
-        mid_ove += computed_rake * 4.0
-        aero_drag += computed_rake * 2.5
-        straight_spd -= computed_rake * 2.0
-    else: # Negative rake (Nose high) drops diffuser efficiency
-        entry_rot -= abs(computed_rake) * 3.5
-        entry_stab += abs(computed_rake) * 3.0
-        mid_und += abs(computed_rake) * 4.0
-        hs_stab += abs(computed_rake) * 3.5
-
-    # Front Splitter Aero Stall Guard Logic
-    if setup["Front Ride Height"] <= -4:
-        # Ground-effect airflow stalls completely when under-car clearance is lost
-        entry_stab -= 15.0
-        mid_und += 25.0
-        hs_stab -= 12.0
-        brake_perf -= 8.0
-
-    # 2. Anti-Roll Bars (ARB)
-    if setup["Front ARB"] >= 0:
-        entry_rot -= setup["Front ARB"] * 3.5
-        entry_stab += setup["Front ARB"] * 2.0
-        mid_und += setup["Front ARB"] * 4.5
-    else:
-        entry_rot += abs(setup["Front ARB"]) * 4.0
-        entry_stab -= abs(setup["Front ARB"]) * 3.0
-        mid_und -= abs(setup["Front ARB"]) * 3.5
-
-    if setup["Rear ARB"] >= 0:
-        entry_rot += setup["Rear ARB"] * 4.0
-        mid_ove += setup["Rear ARB"] * 5.0
-        exit_trac -= setup["Rear ARB"] * 5.5
-    else:
-        entry_rot -= abs(setup["Rear ARB"]) * 2.5
-        mid_ove -= abs(setup["Rear ARB"]) * 3.5
-        exit_trac += abs(setup["Rear ARB"]) * 4.0
-
-    # 3. Wheel Springs
-    if setup["Front Springs"] >= 0:
-        entry_stab += setup["Front Springs"] * 2.5
-        mid_und += setup["Front Springs"] * 3.5
-        hs_stab += setup["Front Springs"] * 3.0
-    else:
-        entry_stab -= abs(setup["Front Springs"]) * 4.5
-        mid_und -= abs(setup["Front Springs"]) * 2.5
-        hs_stab -= abs(setup["Front Springs"]) * 5.0
-
-    if setup["Rear Springs"] >= 0:
-        entry_rot += setup["Rear Springs"] * 3.0
-        mid_ove += setup["Rear Springs"] * 4.0
-        exit_trac -= setup["Rear Springs"] * 4.5
-    else:
-        entry_rot -= abs(setup["Rear Springs"]) * 1.5
-        mid_ove -= abs(setup["Rear Springs"]) * 3.0
-        exit_trac += abs(setup["Rear Springs"]) * 6.0
-
-    # 4. Braking Core System
-    brake_perf += setup["Brake Pressure"] * 8.5
-    if setup["Brake Pressure"] > 2:
-        entry_stab -= (setup["Brake Pressure"] - 2) * 4.5
-
-    if setup["Brake Bias"] >= 0:
-        entry_rot -= setup["Brake Bias"] * 4.5
-        entry_stab += setup["Brake Bias"] * 5.0
-        mid_und += setup["Brake Bias"] * 2.0
-        brake_perf += setup["Brake Bias"] * 1.5
-    else:
-        entry_rot += abs(setup["Brake Bias"]) * 8.0
-        entry_stab -= abs(setup["Brake Bias"]) * 7.5
-        mid_ove += abs(setup["Brake Bias"]) * 4.0
-
-    # 5. Differential Preload
-    if setup["Diff Preload"] >= 0:
-        entry_rot -= setup["Diff Preload"] * 3.5
-        entry_stab += setup["Diff Preload"] * 4.0
-        mid_und += setup["Diff Preload"] * 2.5
-        exit_trac += setup["Diff Preload"] * 3.5
-    else:
-        entry_rot += abs(setup["Diff Preload"]) * 5.0
-        entry_stab -= abs(setup["Diff Preload"]) * 3.5
-        exit_trac -= abs(setup["Diff Preload"]) * 5.0
-
-    # 6. Rear Wing Aerodynamics
-    if setup["Rear Wing"] >= 0:
-        mid_und += setup["Rear Wing"] * 2.5
-        mid_ove -= setup["Rear Wing"] * 4.0
-        exit_trac += setup["Rear Wing"] * 3.0
-        straight_spd -= setup["Rear Wing"] * 7.5
-        hs_stab += setup["Rear Wing"] * 8.5
-        aero_drag += setup["Rear Wing"] * 9.0
-    else:
-        mid_ove += abs(setup["Rear Wing"]) * 3.5
-        exit_trac -= abs(setup["Rear Wing"]) * 5.0
-        straight_spd += abs(setup["Rear Wing"]) * 6.0
-        hs_stab -= abs(setup["Rear Wing"]) * 12.0
-        aero_drag -= abs(setup["Rear Wing"]) * 8.0
-
-    # 7. Alignment Geometry (Toe & Camber)
-    if setup["Front Toe"] >= 0:
-        entry_rot += setup["Front Toe"] * 4.0
-        mid_und += setup["Front Toe"] * 1.5
-        straight_spd -= setup["Front Toe"] * 2.5
-        aero_drag += setup["Front Toe"] * 1.5
-    else:
-        entry_rot -= abs(setup["Front Toe"]) * 2.5
-        entry_stab += abs(setup["Front Toe"]) * 2.0
-        straight_spd -= abs(setup["Front Toe"]) * 1.5
-
-    if setup["Rear Toe"] >= 0:
-        entry_rot -= setup["Rear Toe"] * 3.0
-        exit_trac += setup["Rear Toe"] * 4.5
-        straight_spd -= setup["Rear Toe"] * 3.0
-        aero_drag += setup["Rear Toe"] * 1.5
-    else:
-        entry_rot += abs(setup["Rear Toe"]) * 7.5
-        exit_trac -= abs(setup["Rear Toe"]) * 8.0
-        entry_stab -= abs(setup["Rear Toe"]) * 6.0
-
-    if setup["Front Camber"] >= 0:
-        entry_rot += setup["Front Camber"] * 3.5
-        mid_und -= setup["Front Camber"] * 4.0
-        brake_perf -= setup["Front Camber"] * 2.0
-    else:
-        mid_und += abs(setup["Front Camber"]) * 3.0
-
-    if setup["Rear Camber"] >= 0:
-        mid_ove -= setup["Rear Camber"] * 3.5
-        exit_trac += setup["Rear Camber"] * 3.0
-        straight_spd -= setup["Rear Camber"] * 1.5
-    else:
-        mid_ove += abs(setup["Rear Camber"]) * 4.0
-        exit_trac -= abs(setup["Rear Camber"]) * 5.0
-
-    # 8. Transient Hydraulic Dampers
-    if setup["Front Bump"] >= 0:
-        entry_rot -= setup["Front Bump"] * 2.0
-        entry_stab += setup["Front Bump"] * 3.0
-    else:
-        entry_rot += abs(setup["Front Bump"]) * 2.5
-        entry_stab -= abs(setup["Front Bump"]) * 2.0
-
-    if setup["Rear Rebound"] >= 0:
-        entry_rot += setup["Rear Rebound"] * 4.0
-        entry_stab -= setup["Rear Rebound"] * 3.5
-    else:
-        entry_rot -= abs(setup["Rear Rebound"]) * 3.0
-        entry_stab += abs(setup["Rear Rebound"]) * 2.5
-
-    if setup["Rear Bump"] >= 0:
-        exit_trac -= setup["Rear Bump"] * 4.5
-    else:
-        exit_trac += abs(setup["Rear Bump"]) * 3.5
-
-    if setup["Front Rebound"] >= 0:
-        mid_und -= setup["Front Rebound"] * 3.0
-    else:
-        mid_und += abs(setup["Front Rebound"]) * 3.5
-
-    # 9. Physical Travel Bumpstops
-    if setup["Bumpstop Range"] < 0:
-        mid_und += abs(setup["Bumpstop Range"]) * 3.5
-        exit_trac -= abs(setup["Bumpstop Range"]) * 4.0
-        hs_stab += abs(setup["Bumpstop Range"]) * 2.5
-    
-    mid_und += setup["Bumpstop Rate"] * 4.0
-    exit_trac -= setup["Bumpstop Rate"] * 4.5
-
-    return {
-        "Corner Entry Rotation": max(min(int(entry_rot), 100), -100),
-        "Corner Entry Stability": max(min(int(entry_stab), 100), -100),
-        "Mid-Corner Understeer": max(min(int(mid_und), 100), -100),
-        "Mid-Corner Oversteer": max(min(int(mid_ove), 100), -100),
-        "Exit Traction": max(min(int(exit_trac), 100), -100),
-        "Braking Performance": max(min(int(brake_perf), 100), -100),
-        "Aerodynamic Drag": max(min(int(aero_drag), 100), -100),
-        "Straight Line Speed": max(min(int(straight_spd), 100), -100),
-        "High-Speed Stability": max(min(int(hs_stab), 100), -100),
-    }
-
-# --- CONTROL ARRAYS INTERFACE GENERATION ---
-sliders = {}
-
-st.markdown("<div class='section-header'>1. Mechanical Roll & Stiffness</div>", unsafe_allow_html=True)
-sliders["Front ARB"] = st.slider("Front ARB (Soft ↔ Stiff)", -5, 5, 0)
-sliders["Rear ARB"] = st.slider("Rear ARB (Soft ↔ Stiff)", -5, 5, 0)
-sliders["Front Springs"] = st.slider("Front Springs (Soft ↔ Stiff)", -5, 5, 0)
-sliders["Rear Springs"] = st.slider("Rear Springs (Soft ↔ Stiff)", -5, 5, 0)
-
-st.markdown("<div class='section-header'>2. Braking & Longitudinal Torque</div>", unsafe_allow_html=True)
-sliders["Brake Pressure"] = st.slider("Brake Pressure (Low ↔ High Force)", -5, 5, 0)
-sliders["Brake Bias"] = st.slider("Brake Bias (Rearward ↔ Forward)", -5, 5, 0)
-sliders["Diff Preload"] = st.slider("Differential Preload (Low ↔ High)", -5, 5, 0)
-
-st.markdown("<div class='section-header'>3. Aerodynamics & Ride Height Platform</div>", unsafe_allow_html=True)
-sliders["Rear Wing"] = st.slider("Rear Wing (Low ↔ High Downforce)", -5, 5, 0)
-sliders["Front Ride Height"] = st.slider("Front Ride Height (Low ↔ High)", -5, 5, 0)
-sliders["Rear Ride Height"] = st.slider("Rear Ride Height (Low ↔ High)", -5, 5, 0)
-
-st.markdown("<div class='section-header'>4. Wheel Alignment (Scrub Vectors)</div>", unsafe_allow_html=True)
-sliders["Front Toe"] = st.slider("Front Toe (Toe-In ↔ Toe-Out)", -5, 5, 0)
-sliders["Rear Toe"] = st.slider("Rear Toe (Toe-Out ↔ Toe-In)", -5, 5, 0)
-sliders["Front Camber"] = st.slider("Front Camber (Standard ↔ Aggressive Negative)", -5, 5, 0)
-sliders["Rear Camber"] = st.slider("Rear Camber (Standard ↔ Aggressive Negative)", -5, 5, 0)
-
-st.markdown("<div class='section-header'>5. Hydraulic Dampers (Transient Weight Control)</div>", unsafe_allow_html=True)
-sliders["Front Bump"] = st.slider("Front Bump / Compression (Soft ↔ Stiff)", -5, 5, 0)
-sliders["Front Rebound"] = st.slider("Front Rebound / Extension (Soft ↔ Stiff)", -5, 5, 0)
-sliders["Rear Bump"] = st.slider("Rear Bump / Compression (Soft ↔ Stiff)", -5, 5, 0)
-sliders["Rear Rebound"] = st.slider("Rear Rebound / Extension (Soft ↔ Stiff)", -5, 5, 0)
-
-st.markdown("<div class='section-header'>6. Travel Boundaries (Bumpstop Pack)</div>", unsafe_allow_html=True)
-sliders["Bumpstop Range"] = st.slider("Bumpstop Clearance Range (Low ↔ High)", -5, 5, 0)
-sliders["Bumpstop Rate"] = st.slider("Bumpstop Spring Rate Stiffness (Soft ↔ Stiff)", -5, 5, 0)
-
-telemetry = calculate_physics(sliders)
-
-# --- GRAPHICAL OUTPUT LAYOUT CONFIGURATION ---
+This application maps the hardware interaction between **Assetto Corsa Competizione (ACC)** telemetry forces 
+and the **Moza Pit House** software profile running on the **Moza R3 3.9 Nm Wheelbase**.
+""")
 st.markdown("---")
-st.markdown("### Live Telemetry Output Analysis")
 
-m_keys = list(telemetry.keys())
-m_vals = list(telemetry.values())
+# Define Hardware Max Constants
+MAX_TORQUE_NM = 3.9
 
-bar_colors = ['#e63946' if val < 0 else '#2a9d8f' for val in m_vals]
-text_labels = [f"{'+' if val > 0 else ''}{val}%" for val in m_vals]
+# Create Sidebar Layout for All Controls
+st.sidebar.header("🔧 MOZA PIT HOUSE CONFIGURATION")
 
-fig = go.Figure()
-fig.add_trace(go.Bar(
-    y=m_keys,
-    x=m_vals,
-    orientation='h',
-    text=text_labels,
-    textposition='outside',
-    marker_color=bar_colors,
-    hoverinfo='none',
-    textfont=dict(family="monospace", size=10, color="#222")
-))
-
-fig.update_layout(
-    xaxis=dict(
-        range=[-100, 100],
-        tickvals=[-100, 0, 100],
-        ticktext=["-100%", "0%", "100%"],
-        fixedrange=True,
-        gridcolor="#f3f3f3",
-        zerolinecolor="#333333",
-        zerolinewidth=1.5
-    ),
-    yaxis=dict(
-        autorange="reversed",
-        fixedrange=True,
-        showgrid=False,
-        tickfont=dict(family="Arial", size=11, color="#333")
-    ),
-    margin=dict(l=165, r=40, t=10, b=10),
-    height=360,
-    plot_bgcolor="rgba(0,0,0,0)",
-    paper_bgcolor="rgba(0,0,0,0)"
+moza_ffb = st.sidebar.slider(
+    "Game Force Feedback Intensity (%)", 
+    min_value=0, max_value=100, value=100, step=1
+)
+moza_torque_limit = st.sidebar.slider(
+    "Maximum Output Torque Limit (%)", 
+    min_value=50, max_value=100, value=100, step=1
+)
+moza_inertia = st.sidebar.slider(
+    "Natural Inertia (%)", 
+    min_value=100, max_value=500, value=140, step=5
 )
 
-st.markdown("<p style='text-align: right; font-size: 0.7rem; color: #555; margin-right: 15px; margin-bottom:-5px;'>Impact (%) →</p>", unsafe_allow_html=True)
-st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+st.sidebar.markdown("### 🎚️ FFB Effect Equalizer")
+eq_15hz = st.sidebar.slider("15 Hz (Body Bumps/Suspension) (%)", 0, 500, 100, 10)
+eq_25hz = st.sidebar.slider("25 Hz (ABS / Heavy Curbs) (%)", 0, 500, 100, 10)
+eq_40hz = st.sidebar.slider("40 Hz (Rumble Strips) (%)", 0, 500, 100, 10)
+eq_60hz = st.sidebar.slider("60 Hz (Road Textures Low) (%)", 0, 500, 100, 10)
+eq_100hz = st.sidebar.slider("100 Hz (Road Textures High) (%)", 0, 500, 100, 10)
 
-# --- COMPREHENSIVE STATUS OUTPUT ANALYSIS MATRIX ---
-mid_und_val = telemetry["Mid-Corner Understeer"]
-mid_ove_val = telemetry["Mid-Corner Oversteer"]
-entry_stab_val = telemetry["Corner Entry Stability"]
-hs_stab_val = telemetry["High-Speed Stability"]
+st.sidebar.header("🎮 ACC IN-GAME CONFIGURATION")
+acc_gain = st.sidebar.slider("Gain (%)", 0, 100, 80, 1)
+acc_dynamic_damping = st.sidebar.slider("Dynamic Damping (%)", 0, 100, 100, 1)
+acc_road_effects = st.sidebar.slider("Road Effects (%)", 0, 100, 20, 1)
+acc_min_force = st.sidebar.slider("Minimum Force (%)", 0, 100, 0, 1)
 
-# Safety evaluation sequencing
-if sliders["Front Ride Height"] <= -4:
-    status_str = "⚠️ Front Splitter Choked: Heavy Understeer Stall!"
-elif hs_stab_val < -40:
-    status_str = "💀 Aero Stall: Critical High-Speed Spin Risk!"
-elif mid_und_val > 20:
-    status_str = "Strong Understeer Balance"
-elif mid_ove_val > 20:
-    status_str = "Strong Oversteer Bias"
-elif entry_stab_val < -15:
-    status_str = "Unstable / Volatile Snap Oversteer Risk"
-elif mid_und_val > 5:
-    status_str = "Mild Understeer Character"
-elif mid_ove_val > 5:
-    status_str = "Mild Oversteer Character"
-else:
-    status_str = "Neutral Balance / Balanced Mechanical Tracking"
+# Core Mathematics / Calculations Engines
+# Master scaling scalar passed through DirectInput constant force channels
+base_signal_scalar = (acc_gain / 100.0) * (moza_ffb / 100.0) * (moza_torque_limit / 100.0)
 
-st.markdown(f"""
-    <div class='status-card'>
-        <div class='status-title'>Calculated Balance Status</div>
-        <div class='status-value'>{status_str}</div>
-    </div>
-""", unsafe_allow_html=True)
+# Define driving physics phases and their corresponding raw input scaling weights
+driving_phases = {
+    "Front Tire Grip (Peak Lateral Cornering)": {
+        "factor": 1.0, "category": "physics", "desc": "Maximum continuous mechanical cornering force on the front steering rack."
+    },
+    "First Stage of Losing Front Tire Grip (Initial Understeer Slip)": {
+        "factor": 0.80, "category": "physics", "desc": "Pneumatic trail decreases as front tires slip past optimal grip threshold."
+    },
+    "Second Stage of Losing Front Tire Grip (Severe Push Understeer)": {
+        "factor": 0.45, "category": "physics", "desc": "Steering rack goes noticeably light as the front tires scrub and slide over the tarmac."
+    },
+    "Rear Tire Grip & Sliding Out (Oversteer Self-Centering)": {
+        "factor": 0.70, "category": "physics", "desc": "Aligning torque forces the wheel to rapidly counter-steer into the direction of the rear slide."
+    },
+    "Road Textures (Fine Surface Details)": {
+        "factor": 0.10, "category": "road", "eq": eq_100hz, "desc": "Micro-vibrations driven directly by road coarseness coefficients."
+    },
+    "Road Bumps (Suspension Travel / Expansion Joints)": {
+        "factor": 0.25, "category": "road", "eq": eq_15hz, "desc": "Low-frequency displacement signals passing through the damper mechanics."
+    },
+    "Curbs (Apex / Exit Strike Transients)": {
+        "factor": 0.50, "category": "road", "eq": eq_25hz, "desc": "Sudden vertical suspension compression forcing high amplitude feedback spikes."
+    },
+    "Rumble Strips (Corrugated Strip Ripples)": {
+        "factor": 0.40, "category": "road", "eq": eq_40hz, "desc": "High frequency oscillating ripple frequency overlay."
+    },
+    "Straight-Line Braking (Forward Pitch Load + ABS Ripple)": {
+        "factor": 0.35, "category": "braking", "eq": eq_25hz, "desc": "Combines forward weight transfer loading with high frequency brake pedal anti-lock pulses."
+    }
+}
+
+# Display Calculated Metrics Output Page Layout
+col_left, col_right = st.columns([2, 1])
+
+with col_left:
+    st.header("📊 Resulting Torque Force Analysis")
+    st.write("Calculated real physical output mapping for each distinct phase based on current settings:")
+    
+    for phase_name, data in driving_phases.items():
+        if data["category"] == "physics":
+            calculated_nm = data["factor"] * base_signal_scalar * MAX_TORQUE_NM
+        elif data["category"] == "road":
+            calculated_nm = data["factor"] * (acc_road_effects / 100.0) * (data["eq"] / 100.0) * MAX_TORQUE_NM
+        elif data["category"] == "braking":
+            physics_load = data["factor"] * base_signal_scalar * MAX_TORQUE_NM
+            abs_vibe = 0.15 * (acc_road_effects / 100.0) * (data["eq"] / 100.0) * MAX_TORQUE_NM
+            calculated_nm = physics_load + abs_vibe
+        
+        # Hard cap at absolute hardware limits
+        calculated_nm = min(calculated_nm, MAX_TORQUE_NM)
+        percentage_of_motor = (calculated_nm / MAX_TORQUE_NM) * 100.0
+        
+        # Streamlit Card Layout for each metric
+        with st.expander(f"**{phase_name}**: {calculated_nm:.3f} Nm", expanded=True):
+            st.markdown(f"*{data['desc']}*")
+            st.progress(calculated_nm / MAX_TORQUE_NM)
+            st.caption(f"Utilizing **{percentage_of_motor:.1f}%** of total motor hardware dynamic range capacity.")
+
+with col_right:
+    st.header("📈 System Diagnostics")
+    st.metric(label="Wheelbase Maximum Hardware Ceiling", value=f"{MAX_TORQUE_NM} Nm")
+    
+    calculated_peak = base_signal_scalar * MAX_TORQUE_NM
+    st.metric(label="Calculated Clean Signal Peak Capacity", value=f"{calculated_peak:.2f} Nm")
+    
+    if calculated_peak > MAX_TORQUE_NM * 0.95:
+        st.error("⚠️ HIGH RISK OF CLIPPING: High-load cornering phases will clip out detail at 3.9 Nm. Consider lowering in-game Gain.")
+    elif calculated_peak < MAX_TORQUE_NM * 0.50:
+        st.warning("ℹ️ Dynamic range under-utilized. Steering feel may feel overly light for a 3.9 Nm motor.")
+    else:
+        st.success("✅ Clean force mapping window optimized for entry-level Direct Drive physics accuracy.")
+        
+    st.info(f"**Dynamic Damping Effect:** Wheel resistance scaling weight is adjusted to **{acc_dynamic_damping}%** scaling with car speed vectors.")
