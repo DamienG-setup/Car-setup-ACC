@@ -110,14 +110,56 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
 st.header("🏁 Dynamic Telemetry Scenarios")
 st.markdown("Each scenario injects completely different wheel velocity, wheel acceleration, and car speed telemetry to determine the worst-case mechanical tax at that exact moment.")
 
-# Updated Phases with specialized kinematic telemetry metrics
+# Updated Scenarios with 3 distinct chronological phases each
 scenarios = [
-    {"name": "Low-Speed Hairpin", "sustained": 0.50, "transient": 0.15, "car_speed": 0.2, "w_vel": 12.0, "w_accel": 15.0},
-    {"name": "Medium Speed Corner", "sustained": 0.75, "transient": 0.25, "car_speed": 0.6, "w_vel": 6.0, "w_accel": 10.0},
-    {"name": "High-Speed Corner", "sustained": 1.15, "transient": 0.30, "car_speed": 1.0, "w_vel": 2.0, "w_accel": 5.0},
-    {"name": "Heavy Braking", "sustained": 0.20, "transient": 0.80, "car_speed": 0.8, "w_vel": 1.0, "w_accel": 15.0},
-    {"name": "Snap Oversteer", "sustained": 0.10, "transient": 1.00, "car_speed": 0.5, "w_vel": 25.0, "w_accel": 80.0},
-    {"name": "Curb Strike", "sustained": 0.40, "transient": 1.50, "car_speed": 0.7, "w_vel": 15.0, "w_accel": 50.0}
+    {
+        "name": "Low-Speed Hairpin",
+        "phases": [
+            {"name": "Peak Grip", "sustained": 0.50, "transient": 0.10, "car_speed": 0.2, "w_vel": 5.0, "w_accel": 5.0},
+            {"name": "Edge of Losing Grip", "sustained": 0.55, "transient": 0.25, "car_speed": 0.2, "w_vel": 8.0, "w_accel": 10.0},
+            {"name": "Losing Grip", "sustained": 0.30, "transient": 0.40, "car_speed": 0.2, "w_vel": 15.0, "w_accel": 25.0}
+        ]
+    },
+    {
+        "name": "Medium Speed Corner",
+        "phases": [
+            {"name": "Peak Grip", "sustained": 0.75, "transient": 0.15, "car_speed": 0.6, "w_vel": 3.0, "w_accel": 5.0},
+            {"name": "Edge of Losing Grip", "sustained": 0.85, "transient": 0.35, "car_speed": 0.6, "w_vel": 6.0, "w_accel": 12.0},
+            {"name": "Losing Grip", "sustained": 0.50, "transient": 0.60, "car_speed": 0.6, "w_vel": 12.0, "w_accel": 30.0}
+        ]
+    },
+    {
+        "name": "High-Speed Corner",
+        "phases": [
+            {"name": "Peak Grip", "sustained": 1.15, "transient": 0.20, "car_speed": 1.0, "w_vel": 1.0, "w_accel": 2.0},
+            {"name": "Edge of Losing Grip", "sustained": 1.20, "transient": 0.40, "car_speed": 1.0, "w_vel": 3.0, "w_accel": 8.0},
+            {"name": "Losing Grip", "sustained": 0.80, "transient": 0.70, "car_speed": 1.0, "w_vel": 10.0, "w_accel": 20.0}
+        ]
+    },
+    {
+        "name": "Heavy Braking",
+        "phases": [
+            {"name": "Initial Heavy Braking (ABS)", "sustained": 0.20, "transient": 0.80, "car_speed": 0.8, "w_vel": 1.0, "w_accel": 5.0},
+            {"name": "Trail Braking", "sustained": 0.30, "transient": 0.40, "car_speed": 0.5, "w_vel": 5.0, "w_accel": 10.0},
+            {"name": "Brake Release / Turn-in", "sustained": 0.40, "transient": 0.10, "car_speed": 0.4, "w_vel": 8.0, "w_accel": 8.0}
+        ]
+    },
+    {
+        "name": "Snap Oversteer",
+        "phases": [
+            {"name": "Initial Snap (Rear Let Go)", "sustained": 0.10, "transient": 1.00, "car_speed": 0.5, "w_vel": 5.0, "w_accel": 80.0},
+            {"name": "Violent Catch (Counter-steer)", "sustained": 0.60, "transient": 0.80, "car_speed": 0.5, "w_vel": 25.0, "w_accel": 50.0},
+            {"name": "Stabilization", "sustained": 0.40, "transient": 0.20, "car_speed": 0.4, "w_vel": 10.0, "w_accel": 15.0}
+        ]
+    },
+    {
+        "name": "Curb Strike",
+        "phases": [
+            {"name": "Initial Strike (Impact)", "sustained": 0.40, "transient": 1.50, "car_speed": 0.7, "w_vel": 10.0, "w_accel": 50.0},
+            {"name": "Riding the Curb", "sustained": 0.30, "transient": 1.00, "car_speed": 0.7, "w_vel": 15.0, "w_accel": 20.0},
+            {"name": "Dropping Off", "sustained": 0.40, "transient": 1.20, "car_speed": 0.7, "w_vel": 12.0, "w_accel": 40.0}
+        ]
+    }
 ]
 
 # Create a 2x3 Grid for better layout scaling
@@ -126,36 +168,51 @@ cols2 = st.columns(3)
 all_cols = cols1 + cols2
 
 for idx, scene in enumerate(scenarios):
-    res = simulate_ffb_pipeline(scene["sustained"], scene["transient"], scene["car_speed"], scene["w_vel"], scene["w_accel"])
+    
+    # Simulate all 3 phases
+    phase_results = []
+    for p in scene["phases"]:
+        res = simulate_ffb_pipeline(p["sustained"], p["transient"], p["car_speed"], p["w_vel"], p["w_accel"])
+        res["phase_name"] = p["name"]
+        phase_results.append(res)
+        
+    # Determine the "Worst Case" phase for the main metrics (based on highest requested torque)
+    worst_res = max(phase_results, key=lambda x: x["requested_nm"])
     
     with all_cols[idx]:
         st.markdown(f"### {scene['name']}")
         
-        # Display Status
-        if res["acc_clip"]:
+        # Display Status for the worst phase
+        if worst_res["acc_clip"]:
             st.error("🟥 ACC SOFTWARE CLIPPING\n\nSignal flatlined in game. EQ boosts severely muted.")
-        elif res["hw_clip"]:
-            st.warning(f"🟧 HARDWARE CLIPPING\n\nMotor lacks {res['lost_to_hw_clip']:.2f} Nm to render details.")
+        elif worst_res["hw_clip"]:
+            st.warning(f"🟧 HARDWARE CLIPPING\n\nMotor lacks {worst_res['lost_to_hw_clip']:.2f} Nm to render details.")
         else:
             st.success("🟩 CLEAN SIGNAL\n\nFull dynamic range rendered.")
             
         # Final Force Metric
-        st.metric(label="Delivered Feedback", value=f"{res['final_nm']:.2f} Nm")
-        
-        # Breakdown
-        st.caption(f"**Requested Pipeline Telemetry (Pre-Clip):**")
+        st.metric(label="Overall Delivered Feedback", value=f"{worst_res['final_nm']:.2f} Nm")
         
         # DYNAMIC WARNING EXPLAINING MECHANICAL OVERHEAD
-        if res["hw_clip"]:
-            st.caption(f"⚠️ *Note: The motor is operating at 100% capacity. The delivered feedback is what is left over after {res['total_tax']:.2f} Nm is consumed by internal resistance (damping, friction, and inertia).*")
+        if worst_res["hw_clip"]:
+            st.caption(f"⚠️ *Note: The motor is operating at 100% capacity. The overall delivered feedback is what is left over after {worst_res['total_tax']:.2f} Nm is consumed by internal resistance (damping, friction, and inertia).*")
+        
+        # Phase Progression Breakdown
+        st.markdown("**Phase Breakdown (Req. ➔ Delivered):**")
+        for i, r in enumerate(phase_results):
+            st.caption(f"{i+1}. {r['phase_name']}: **{r['requested_nm']:.2f} Nm** ➔ **{r['final_nm']:.2f} Nm**")
             
-        st.caption(f"↳ Game Output Signal: **{res['acc_signal']*100:.0f}%**")
-        st.caption(f"↳ Req. Base Corner Force: **{res['dsp_sustained']:.2f} Nm**")
-        st.caption(f"↳ Req. EQ Transient Spikes: **{res['dsp_transient']:.2f} Nm**")
-        st.caption(f"↳ **Mech + Damper Tax: {res['total_tax']:.2f} Nm**")
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # Original Detailed Breakdown (Mapped to Worst Phase)
+        st.caption(f"**Worst-Case Pipeline Telemetry (Pre-Clip):**")
+        st.caption(f"↳ Game Output Signal: **{worst_res['acc_signal']*100:.0f}%**")
+        st.caption(f"↳ Req. Base Corner Force: **{worst_res['dsp_sustained']:.2f} Nm**")
+        st.caption(f"↳ Req. EQ Transient Spikes: **{worst_res['dsp_transient']:.2f} Nm**")
+        st.caption(f"↳ **Mech + Damper Tax: {worst_res['total_tax']:.2f} Nm**")
         
         # Visual Progress Bar for Motor Capacity
-        usage_pct = min(res['final_nm'] / max_torque_nm, 1.0)
+        usage_pct = min(worst_res['final_nm'] / max_torque_nm, 1.0)
         st.progress(usage_pct)
         st.markdown("---")
 
@@ -163,14 +220,14 @@ for idx, scene in enumerate(scenarios):
 st.header("📊 Worst-Case Constructive Interference (Curb Strike Insight)")
 
 st.markdown("""
-This chart visualizes what happens during the **Curb Strike** scenario. 
+This chart visualizes what happens during the **Initial Strike** phase of a curb. 
 Notice how dynamic mechanical overhead (inertia/damper reacting to violent wheel movement) and ACC's software limits interact with the equalizer. 
 If ACC clips at the software level, the blue "EQ Transients" bar will disappear, simulating a muddy, flatlined FFB feeling.
 """)
 
-# Fetching the Curb Strike data specifically for visualization
-# sustained=0.40, transient=1.50, car_speed=0.7, w_vel=15.0, w_accel=50.0
-curb_data = simulate_ffb_pipeline(0.40, 1.50, 0.7, 15.0, 50.0)
+# Fetching the Initial Strike data specifically for visualization
+# sustained=0.40, transient=1.50, car_speed=0.7, w_vel=10.0, w_accel=50.0
+curb_data = simulate_ffb_pipeline(0.40, 1.50, 0.7, 10.0, 50.0)
 
 chart_data = pd.DataFrame({
     "Torque Allocation": [
