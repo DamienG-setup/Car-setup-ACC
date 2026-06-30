@@ -27,8 +27,10 @@ st.sidebar.header("3️⃣ WHEELBASE DSP / EQ")
 moza_ffb = st.sidebar.slider("Base FFB Intensity (%)", 0, 100, 100)
 moza_road_sens = st.sidebar.slider("Road Sensitivity (0-10)", 0, 10, 8, help="Master multiplier for high-frequency bands.")
 st.sidebar.markdown("**Constructive EQ Boosts (Transient Scalers)**")
-eq_low_hz = st.sidebar.slider("15-25 Hz (Body/Bumps) (%)", 0, 500, 120, 10)
-eq_high_hz = st.sidebar.slider("40-100 Hz (Textures/Slips) (%)", 0, 500, 130, 10)
+eq_15_hz = st.sidebar.slider("15 Hz (Body/Suspension) (%)", 0, 500, 120, 10)
+eq_25_hz = st.sidebar.slider("25 Hz (Bumps/Engine) (%)", 0, 500, 120, 10)
+eq_40_hz = st.sidebar.slider("40 Hz (Textures/Slips) (%)", 0, 500, 130, 10)
+eq_100_hz = st.sidebar.slider("100 Hz (High Freq Details) (%)", 0, 500, 130, 10)
 
 st.sidebar.header("4️⃣ BASE MECHANICAL PROFILES")
 st.sidebar.markdown("*Set the base resistance percentages of your wheelbase software.*")
@@ -58,9 +60,13 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
     road_sens_scalar = moza_road_sens / 10.0
     
     # EQ only amplifies the TRANSIENT part of the signal (AC wave), not the sustained part (DC wave)
-    eq_low_multiplier = (eq_low_hz / 100.0)
-    eq_high_multiplier = (eq_high_hz / 100.0)
-    avg_eq_boost = ((eq_low_multiplier + eq_high_multiplier) / 2.0) * road_sens_scalar
+    eq_15_mult = eq_15_hz / 100.0
+    eq_25_mult = eq_25_hz / 100.0
+    eq_40_mult = eq_40_hz / 100.0
+    eq_100_mult = eq_100_hz / 100.0
+    
+    # Average out the distinct frequency bands for the transient simulation
+    avg_eq_boost = ((eq_15_mult + eq_25_mult + eq_40_mult + eq_100_mult) / 4.0) * road_sens_scalar
     
     dsp_sustained_nm = game_clip_sustained * base_scalar * max_torque_nm
     dsp_transient_nm = (transient_game_signal * avg_eq_boost) * base_scalar * max_torque_nm
@@ -135,10 +141,15 @@ for idx, scene in enumerate(scenarios):
         st.metric(label="Delivered Feedback", value=f"{res['final_nm']:.2f} Nm")
         
         # Breakdown
-        st.caption(f"**Pipeline Telemetry Breakdown:**")
+        st.caption(f"**Requested Pipeline Telemetry (Pre-Clip):**")
+        
+        # Dynamic warning to explain the math discrepancy during clipping
+        if res["hw_clip"]:
+            st.caption("*Note: The requested forces below exceed the motor's budget. The delivered feedback metric above is capped.*")
+            
         st.caption(f"↳ Game Output Signal: **{res['acc_signal']*100:.0f}%**")
-        st.caption(f"↳ Base Corner Force: **{res['dsp_sustained']:.2f} Nm**")
-        st.caption(f"↳ EQ Transient Spikes: **{res['dsp_transient']:.2f} Nm**")
+        st.caption(f"↳ Req. Base Corner Force: **{res['dsp_sustained']:.2f} Nm**")
+        st.caption(f"↳ Req. EQ Transient Spikes: **{res['dsp_transient']:.2f} Nm**")
         st.caption(f"↳ **Mech + Damper Tax: {res['total_tax']:.2f} Nm**")
         
         # Visual Progress Bar for Motor Capacity
