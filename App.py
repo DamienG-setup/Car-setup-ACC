@@ -30,6 +30,7 @@ st.sidebar.markdown("**Constructive EQ Boosts (Transient Scalers)**")
 eq_15_hz = st.sidebar.slider("15 Hz (Body/Suspension) (%)", 0, 500, 120, 10)
 eq_25_hz = st.sidebar.slider("25 Hz (Bumps/Engine) (%)", 0, 500, 120, 10)
 eq_40_hz = st.sidebar.slider("40 Hz (Textures/Slips) (%)", 0, 500, 130, 10)
+eq_60_hz = st.sidebar.slider("60 Hz (Road Noise/Vibrations) (%)", 0, 500, 130, 10)
 eq_100_hz = st.sidebar.slider("100 Hz (High Freq Details) (%)", 0, 500, 130, 10)
 
 st.sidebar.header("4️⃣ BASE MECHANICAL PROFILES")
@@ -63,10 +64,11 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
     eq_15_mult = eq_15_hz / 100.0
     eq_25_mult = eq_25_hz / 100.0
     eq_40_mult = eq_40_hz / 100.0
+    eq_60_mult = eq_60_hz / 100.0
     eq_100_mult = eq_100_hz / 100.0
     
     # Average out the distinct frequency bands for the transient simulation
-    avg_eq_boost = ((eq_15_mult + eq_25_mult + eq_40_mult + eq_100_mult) / 4.0) * road_sens_scalar
+    avg_eq_boost = ((eq_15_mult + eq_25_mult + eq_40_mult + eq_60_mult + eq_100_mult) / 5.0) * road_sens_scalar
     
     dsp_sustained_nm = game_clip_sustained * base_scalar * max_torque_nm
     dsp_transient_nm = (transient_game_signal * avg_eq_boost) * base_scalar * max_torque_nm
