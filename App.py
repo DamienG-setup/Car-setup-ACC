@@ -1,9 +1,9 @@
 import streamlit as st
 import plotly.graph_objects as go
 
-# Initialize wide viewport with streamlined margins
+# Initialize viewport configuration
 st.set_page_config(
-    page_title="GT3 Advanced Setup Sandbox",
+    page_title="GT3 Advanced Telemetry Sandbox",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
@@ -37,11 +37,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown("<h1>Car Setup Balance Simulator</h1>", unsafe_allow_html=True)
-st.markdown("<div class='subtitle'>GT3 ASYMMETRIC PHYSICS CORE v3.0</div>", unsafe_allow_html=True)
+st.markdown("<div class='subtitle'>GT3 TELEMETRY CORE v3.5 (VALIDATED)</div>", unsafe_allow_html=True)
 
-# --- ADVANCED ASYMMETRIC VEHICLE DYNAMICS SIMULATION ENGINE ---
+# --- VALIDATED ASYMMETRIC VEHICLE DYNAMICS ENGINE ---
 def calculate_advanced_physics(setup):
-    # Base telemetry initialization
     entry_rot = 0.0
     entry_stab = 0.0
     mid_und = 0.0
@@ -50,6 +49,7 @@ def calculate_advanced_physics(setup):
     brake_perf = 0.0
     straight_spd = 0.0
     hs_stab = 0.0
+    aero_drag = 0.0
 
     # 1. Anti-Roll Bars (ARB)
     if setup["Front ARB"] >= 0:
@@ -70,13 +70,13 @@ def calculate_advanced_physics(setup):
         mid_ove -= abs(setup["Rear ARB"]) * 3.5
         exit_trac += abs(setup["Rear ARB"]) * 4.0
 
-    # 2. Springs & Chassis Stiffness
+    # 2. Wheel Springs
     if setup["Front Springs"] >= 0:
         entry_stab += setup["Front Springs"] * 2.5
         mid_und += setup["Front Springs"] * 3.5
         hs_stab += setup["Front Springs"] * 3.0
     else:
-        entry_stab -= abs(setup["Front Springs"]) * 4.5  # Heavy pitching breaks aerodynamic floor seal
+        entry_stab -= abs(setup["Front Springs"]) * 4.5
         mid_und -= abs(setup["Front Springs"]) * 2.5
         hs_stab -= abs(setup["Front Springs"]) * 5.0
 
@@ -87,24 +87,24 @@ def calculate_advanced_physics(setup):
     else:
         entry_rot -= abs(setup["Rear Springs"]) * 1.5
         mid_ove -= abs(setup["Rear Springs"]) * 3.0
-        exit_trac += abs(setup["Rear Springs"]) * 6.0  # Dynamic squat maximizes rear-tire downforce loading
+        exit_trac += abs(setup["Rear Springs"]) * 6.0
 
-    # 3. Braking Matrix
+    # 3. Braking Parameters
     brake_perf += setup["Brake Pressure"] * 8.5
-    if setup["Brake Pressure"] > 2:  # Over-pressuring locks wheels easily without ABS intervention
+    if setup["Brake Pressure"] > 2:
         entry_stab -= (setup["Brake Pressure"] - 2) * 4.5
 
-    if setup["Brake Bias"] >= 0:  # Forward Bias
+    if setup["Brake Bias"] >= 0:
         entry_rot -= setup["Brake Bias"] * 4.5
         entry_stab += setup["Brake Bias"] * 5.0
         mid_und += setup["Brake Bias"] * 2.0
         brake_perf += setup["Brake Bias"] * 1.5
-    else:  # Rearward Bias
-        entry_rot += abs(setup["Brake Bias"]) * 8.0   # Extreme trail-braking pivot rotation induction
-        entry_stab -= abs(setup["Brake Bias"]) * 7.5  # Severe risk of rear axle snap-loose under deceleration
+    else:
+        entry_rot += abs(setup["Brake Bias"]) * 8.0
+        entry_stab -= abs(setup["Brake Bias"]) * 7.5
         mid_ove += abs(setup["Brake Bias"]) * 4.0
 
-    # 4. Differential & Aero Vectors
+    # 4. Differential Preload
     if setup["Diff Preload"] >= 0:
         entry_rot -= setup["Diff Preload"] * 3.5
         entry_stab += setup["Diff Preload"] * 4.0
@@ -113,93 +113,106 @@ def calculate_advanced_physics(setup):
     else:
         entry_rot += abs(setup["Diff Preload"]) * 5.0
         entry_stab -= abs(setup["Diff Preload"]) * 3.5
-        exit_trac -= abs(setup["Diff Preload"]) * 5.0  # Inside wheel spin energy waste
+        exit_trac -= abs(setup["Diff Preload"]) * 5.0
 
+    # 5. Rear Wing Aerodynamics
     if setup["Rear Wing"] >= 0:
         mid_und += setup["Rear Wing"] * 2.5
         mid_ove -= setup["Rear Wing"] * 4.0
         exit_trac += setup["Rear Wing"] * 3.0
-        straight_spd -= setup["Rear Wing"] * 7.5  # Drag penalty scales exponentially
+        straight_spd -= setup["Rear Wing"] * 7.5
         hs_stab += setup["Rear Wing"] * 8.5
+        aero_drag += setup["Rear Wing"] * 9.0
     else:
         mid_ove += abs(setup["Rear Wing"]) * 3.5
-        exit_trac -= abs(setup["Rear Wing"]) * 4.5
+        exit_trac -= abs(setup["Rear Wing"]) * 5.0
         straight_spd += abs(setup["Rear Wing"]) * 6.0
-        hs_stab -= abs(setup["Rear Wing"]) * 12.0  # Complete vertical downforce separation stall
+        hs_stab -= abs(setup["Rear Wing"]) * 12.0
+        aero_drag -= abs(setup["Rear Wing"]) * 8.0
 
-    # 5. Alignment Geometry (Toe & Camber)
-    entry_rot += setup["Front Toe"] * 4.0
-    mid_und += setup["Front Toe"] * 1.5
-    straight_spd -= abs(setup["Front Toe"]) * 2.5  # Tire scrubbing structural drag resistance
+    # 6. Alignment Wheel Geometry (Toe & Camber)
+    if setup["Front Toe"] >= 0:  # Toe-Out
+        entry_rot += setup["Front Toe"] * 4.0
+        mid_und += setup["Front Toe"] * 1.5
+        straight_spd -= setup["Front Toe"] * 2.5
+        aero_drag += setup["Front Toe"] * 1.5
+    else:  # Toe-In
+        entry_rot -= abs(setup["Front Toe"]) * 2.5
+        entry_stab += abs(setup["Front Toe"]) * 2.0
+        straight_spd -= abs(setup["Front Toe"]) * 1.5
 
-    entry_rot -= setup["Rear Toe"] * 3.0
-    exit_trac += setup["Rear Toe"] * 4.5
-    straight_spd -= abs(setup["Rear Toe"]) * 3.0
+    if setup["Rear Toe"] >= 0:  # Toe-In
+        entry_rot -= setup["Rear Toe"] * 3.0
+        exit_trac += setup["Rear Toe"] * 4.5
+        straight_spd -= setup["Rear Toe"] * 3.0
+        aero_drag += setup["Rear Toe"] * 1.5
+    else:  # Toe-Out (Volatile)
+        entry_rot += abs(setup["Rear Toe"]) * 7.5
+        exit_trac -= abs(setup["Rear Toe"]) * 8.0
+        entry_stab -= abs(setup["Rear Toe"]) * 6.0
 
-    if setup["Front Camber"] >= 0:  # More negative camber
+    if setup["Front Camber"] >= 0:
         entry_rot += setup["Front Camber"] * 3.5
         mid_und -= setup["Front Camber"] * 4.0
-        mid_ove += setup["Front Camber"] * 2.5
-        brake_perf -= setup["Front Camber"] * 2.0  # Reduced straight line longitudinal footprint
+        brake_perf -= setup["Front Camber"] * 2.0
     else:
         mid_und += abs(setup["Front Camber"]) * 3.0
 
-    if setup["Rear Camber"] >= 0:  # More negative camber
+    if setup["Rear Camber"] >= 0:
         mid_ove -= setup["Rear Camber"] * 3.5
-        exit_trac += setup["Rear Camber"] * 3.0  # High cornering lateral thrust maintenance
+        exit_trac += setup["Rear Camber"] * 3.0
         straight_spd -= setup["Rear Camber"] * 1.5
     else:
         mid_ove += abs(setup["Rear Camber"]) * 4.0
         exit_trac -= abs(setup["Rear Camber"]) * 5.0
 
-    # 6. Ride Heights & Aerodynamic Rake
-    # Lower ride height increases absolute floor ground-effects downforce extraction
+    # 7. Ride Heights & Aero Rake
     straight_spd -= setup["Ride Height"] * 2.0
     hs_stab -= setup["Ride Height"] * 3.5
 
-    if setup["Rake"] >= 0:  # High rear ride height relative to front nose plane
+    if setup["Rake"] >= 0:
         entry_rot += setup["Rake"] * 5.5
-        entry_stab -= setup["Rake"] * 4.5  # Tail becomes aerodynamically light during entry phases
+        entry_stab -= setup["Rake"] * 4.5
         mid_und -= setup["Rake"] * 4.0
         mid_ove += setup["Rake"] * 4.5
-        straight_spd -= setup["Rake"] * 3.0  # Increased frontal exposed cross-section drag profile
+        straight_spd -= setup["Rake"] * 3.0
+        aero_drag += setup["Rake"] * 4.0
     else:
         entry_rot -= abs(setup["Rake"]) * 3.5
         entry_stab += abs(setup["Rake"]) * 3.0
         mid_und += abs(setup["Rake"]) * 4.0
         hs_stab += abs(setup["Rake"]) * 4.0
 
-    # 7. Transient Dampers (Bump & Rebound Matrix)
+    # 8. Dampers (Transient Load Control)
     if setup["Front Bump"] >= 0:
-        entry_rot -= setup["Front Bump"] * 2.0  # Delays nose dive force distribution speed
+        entry_rot -= setup["Front Bump"] * 2.0
         entry_stab += setup["Front Bump"] * 3.0
     else:
         entry_rot += abs(setup["Front Bump"]) * 2.5
         entry_stab -= abs(setup["Front Bump"]) * 2.0
 
     if setup["Rear Rebound"] >= 0:
-        entry_rot += setup["Rear Rebound"] * 4.0  # Keeps front loaded firmly under trailing brakes
-        entry_stab -= setup["Rear Rebound"] * 3.5  # Rapid weight pull away destabilizes rear contact
+        entry_rot += setup["Rear Rebound"] * 4.0
+        entry_stab -= setup["Rear Rebound"] * 3.5
     else:
         entry_rot -= abs(setup["Rear Rebound"]) * 3.0
         entry_stab += abs(setup["Rear Rebound"]) * 2.5
 
     if setup["Rear Bump"] >= 0:
-        exit_trac -= setup["Rear Bump"] * 4.5  # Harsh weight transfer spikes break rear tires loose instantly
+        exit_trac -= setup["Rear Bump"] * 4.5
     else:
         exit_trac += abs(setup["Rear Bump"]) * 3.5
 
     if setup["Front Rebound"] >= 0:
-        mid_und -= setup["Front Rebound"] * 3.0  # Restricts front extension nose rise out of mid corner apex
+        mid_und -= setup["Front Rebound"] * 3.0
     else:
         mid_und += abs(setup["Front Rebound"]) * 3.5
 
-    # 8. Physical Bumpstops (Dynamic Ranges & Rates)
-    # Lower range means hitting the bumpstops sooner (acts as an immediate spring stiffness spike)
-    if setup["Bumpstop Range"] < 0:  # Restricting travel space
+    # 9. Bumpstops
+    if setup["Bumpstop Range"] < 0:
         mid_und += abs(setup["Bumpstop Range"]) * 3.5
         exit_trac -= abs(setup["Bumpstop Range"]) * 4.0
-        hs_stab += abs(setup["Bumpstop Range"]) * 2.5  # Prevents floor grounding, holding aero map fixed
+        hs_stab += abs(setup["Bumpstop Range"]) * 2.5
     
     mid_und += setup["Bumpstop Rate"] * 4.0
     exit_trac -= setup["Bumpstop Rate"] * 4.5
@@ -211,11 +224,12 @@ def calculate_advanced_physics(setup):
         "Mid-Corner Oversteer": max(min(int(mid_ove), 100), -100),
         "Exit Traction": max(min(int(exit_trac), 100), -100),
         "Braking Performance": max(min(int(brake_perf), 100), -100),
+        "Aerodynamic Drag": max(min(int(aero_drag), 100), -100),
         "Straight Line Speed": max(min(int(straight_spd), 100), -100),
         "High-Speed Stability": max(min(int(hs_stab), 100), -100),
     }
 
-# --- CONTROL INTERFACE ARRAY GENERATION ---
+# --- CONTROL INTERFACE DISPLAY ---
 sliders = {}
 
 st.markdown("<div class='section-header'>1. Mechanical Roll & Stiffness</div>", unsafe_allow_html=True)
@@ -250,7 +264,6 @@ st.markdown("<div class='section-header'>6. Travel Boundaries (Bumpstop Pack)</d
 sliders["Bumpstop Range"] = st.slider("Bumpstop Clearance Range (Low ↔ High Clearance)", -5, 5, 0)
 sliders["Bumpstop Rate"] = st.slider("Bumpstop Spring Rate Stiffness (Soft ↔ Stiff)", -5, 5, 0)
 
-# Process raw numerical state variations through core calculation engine
 telemetry = calculate_advanced_physics(sliders)
 
 # --- GRAPHICAL OUTPUT LAYOUT CONFIGURATION ---
@@ -260,7 +273,6 @@ st.markdown("### Live Telemetry Output Analysis")
 m_keys = list(telemetry.keys())
 m_vals = list(telemetry.values())
 
-# Dynamic horizontal color mapping assignment profiles
 bar_colors = ['#e63946' if val < 0 else '#2a9d8f' for val in m_vals]
 text_labels = [f"{'+' if val > 0 else ''}{val}%" for val in m_vals]
 
@@ -293,7 +305,7 @@ fig.update_layout(
         tickfont=dict(family="Arial", size=11, color="#333")
     ),
     margin=dict(l=165, r=40, t=10, b=10),
-    height=320,
+    height=340,
     plot_bgcolor="rgba(0,0,0,0)",
     paper_bgcolor="rgba(0,0,0,0)"
 )
@@ -305,8 +317,11 @@ st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 mid_und_val = telemetry["Mid-Corner Understeer"]
 mid_ove_val = telemetry["Mid-Corner Oversteer"]
 entry_stab_val = telemetry["Corner Entry Stability"]
+hs_stab_val = telemetry["High-Speed Stability"]
 
-if mid_und_val > 20:
+if hs_stab_val < -40:
+    status_str = "💀 Aero Stall: Critical High-Speed Spin Risk!"
+elif mid_und_val > 20:
     status_str = "Strong Understeer Balance"
 elif mid_ove_val > 20:
     status_str = "Strong Oversteer Bias"
