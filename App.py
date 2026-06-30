@@ -1,171 +1,178 @@
 import streamlit as st
+import pandas as pd
 
 st.set_page_config(
-    page_title="Universal ACC Peak Load Predictor",
+    page_title="Pro ACC Peak Load Predictor",
     page_icon="🏎️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-st.title("🏎️ Universal FFB Peak Load & Clipping Predictor")
+st.title("🏎️ Pro FFB Telemetry & Clipping Simulator")
 st.markdown("""
-This model simulates the **absolute worst-case physical scenarios** across different motor strengths. 
-It calculates the peak torque required when telemetry spikes, EQ bands hit constructive interference, and maximum wheel velocity/acceleration trigger heavy mechanical resistance.
+This simulator uses a **Signal Pipeline Model**. It accurately traces torque from **ACC's Physics Engine**, 
+through the **Game's Software Clipper**, into the **Wheelbase DSP (Equalizer)**, and finally against the **Physical Motor Hardware Budget**.
 """)
 st.markdown("---")
 
-# --- SIDEBAR CONFIGURATION ---
-st.sidebar.header("🏎️ HARDWARE CONFIGURATION")
-# Allows scaling from entry-level options up to heavy-duty direct drive bases
-max_torque_nm = st.sidebar.slider("Wheel Base Peak Torque (Nm)", 2.0, 25.0, 3.9, 0.1, help="Set this to match your specific wheel base rating (e.g., R3=3.9, R5=5.5, R9=9.0, R12=12.0)")
+# --- SIDEBAR: PIPELINE CONFIGURATION ---
+st.sidebar.header("1️⃣ HARDWARE LIMITS")
+max_torque_nm = st.sidebar.slider("Wheel Base Peak Torque (Nm)", 2.0, 25.0, 9.0, 0.1, help="e.g., R5=5.5, R9=9.0, Simucube Sport=17.0")
 
-st.sidebar.header("🔧 PIT HOUSE / BASE BASIC SETTINGS")
-moza_ffb = st.sidebar.slider("Game FFB Intensity (%)", 0, 100, 100)
-moza_torque_limit = st.sidebar.slider("Max Output Torque Limit (%)", 50, 100, 100)
-moza_road_sens = st.sidebar.slider("Road Sensitivity (Master EQ Control) (0-10)", 0, 10, 8)
+st.sidebar.header("2️⃣ ACC IN-GAME OUTPUT")
+acc_gain = st.sidebar.slider("ACC Master Gain (%)", 0, 100, 70, help="Higher gain causes Kunos physics to clip before reaching the wheelbase.")
+acc_dynamic_damping = st.sidebar.slider("ACC Dynamic Damping (%)", 0, 100, 100, help="Gyroscopic damping at high speeds.")
 
-st.sidebar.header("⚠️ WORST-CASE KINEMATICS")
-st.sidebar.markdown("*Simulate violent wheel movements to calculate dynamic mechanical resistance.*")
-wheel_velocity = st.sidebar.slider("Peak Wheel Velocity (rad/s)", 0.0, 20.0, 15.0, help="Drives Damper resistance")
-wheel_acceleration = st.sidebar.slider("Peak Wheel Acceleration (rad/s²)", 0.0, 60.0, 45.0, help="Drives Inertia resistance")
+st.sidebar.header("3️⃣ WHEELBASE DSP / EQ")
+moza_ffb = st.sidebar.slider("Base FFB Intensity (%)", 0, 100, 100)
+moza_road_sens = st.sidebar.slider("Road Sensitivity (0-10)", 0, 10, 8, help="Master multiplier for high-frequency bands.")
+st.sidebar.markdown("**Constructive EQ Boosts (Transient Scalers)**")
+eq_low_hz = st.sidebar.slider("15-25 Hz (Body/Bumps) (%)", 0, 500, 120, 10)
+eq_high_hz = st.sidebar.slider("40-100 Hz (Textures/Slips) (%)", 0, 500, 130, 10)
 
-st.sidebar.header("⚙️ ADVANCED MECHANICAL SETTINGS")
-moza_inertia = st.sidebar.slider("Natural Inertia (%)", 100, 500, 150, 10)
+st.sidebar.header("4️⃣ KINEMATICS & OVERHEAD")
+st.sidebar.markdown("*Mechanical resistance eats into your motor's maximum torque budget.*")
+wheel_velocity = st.sidebar.slider("Peak Wheel Velocity (rad/s)", 0.0, 25.0, 15.0)
+wheel_acceleration = st.sidebar.slider("Peak Wheel Acceleration (rad/s²)", 0.0, 80.0, 50.0)
+moza_inertia = st.sidebar.slider("Natural Inertia (%)", 0, 500, 100, 10)
 moza_damper = st.sidebar.slider("Wheel Damper (%)", 0, 100, 20)
 moza_friction = st.sidebar.slider("Wheel Friction (%)", 0, 100, 10)
-moza_speed_damp = st.sidebar.slider("Speed-dependent Damping (%)", 0, 100, 25)
 
-st.sidebar.header("🎚️ FFB EFFECT EQUALIZER (Hz)")
-eq_15hz = st.sidebar.slider("15 Hz (Weight Transfer / Body Move) (%)", 0, 500, 120, 10)
-eq_25hz = st.sidebar.slider("25 Hz (Suspension Bumps / ABS) (%)", 0, 500, 100, 10)
-eq_40hz = st.sidebar.slider("40 Hz (Curbs / Surface Effects) (%)", 0, 500, 100, 10)
-eq_60hz = st.sidebar.slider("60 Hz (Asphalt Grain / Road Texture) (%)", 0, 500, 110, 10)
-eq_100hz = st.sidebar.slider("100 Hz (Tire Slip Detail / Micro-Vibrations) (%)", 0, 500, 130, 10)
+# --- MATHEMATICAL ENGINE: THE TORQUE BUDGET ---
+# 1. Calculate Mechanical Torque Tax (Overhead)
+# Friction is static. Damper scales with velocity. Inertia scales with acceleration.
+tax_friction = (moza_friction / 100.0) * (0.02 * max_torque_nm)
+tax_damper = (moza_damper / 100.0) * (0.015 * wheel_velocity) * (max_torque_nm * 0.5) 
+tax_inertia = (moza_inertia / 100.0) * (0.005 * wheel_acceleration) * (max_torque_nm * 0.5)
 
-st.sidebar.header("🎮 ACC IN-GAME SETTINGS")
-acc_gain = st.sidebar.slider("Gain (%)", 0, 100, 85)
-acc_dynamic_damping = st.sidebar.slider("Dynamic Damping (%)", 0, 100, 100)
+total_mech_tax = tax_friction + tax_damper + tax_inertia
+available_ffb_budget = max(0.0, max_torque_nm - total_mech_tax)
 
-# --- ENGINE MATHEMATICAL SCALARS ---
-base_scalar = (acc_gain / 100.0) * (moza_ffb / 100.0) * (moza_torque_limit / 100.0)
-road_sens_master = moza_road_sens / 10.0
+st.header("⚙️ Hardware Torque Budget")
+st.info(f"**Mechanical Overhead:** Your motor spends **{total_mech_tax:.2f} Nm** fighting its own friction, damper, and inertia during violent movements. "
+        f"This leaves a maximum of **{available_ffb_budget:.2f} Nm** available to render actual ACC Force Feedback.")
 
-# Worst-Case Constructive Interference (All EQ frequencies hit peak amplitude simultaneously)
-hz_15_force = (eq_15hz / 100.0) * road_sens_master * 0.15 * max_torque_nm * base_scalar
-hz_25_force = (eq_25hz / 100.0) * road_sens_master * 0.12 * max_torque_nm * base_scalar
-hz_40_force = (eq_40hz / 100.0) * road_sens_master * 0.10 * max_torque_nm * base_scalar
-hz_60_force = (eq_60hz / 100.0) * road_sens_master * 0.08 * max_torque_nm * base_scalar
-hz_100_force = (eq_100hz / 100.0) * road_sens_master * 0.14 * max_torque_nm * base_scalar
+# --- CORE SIMULATION PIPELINE FUNCTION ---
+def simulate_ffb_pipeline(raw_sustained, raw_transient, speed_factor=1.0):
+    """
+    Simulates the true signal path from game to hardware.
+    raw_sustained: ACC's raw physics torque for cornering (0.0 to 1.5+)
+    raw_transient: ACC's raw physics torque for bumps/curbs (0.0 to 1.5+)
+    """
+    
+    # STEP 1: ACC Game Signal Processing (Soft Clipping)
+    acc_multiplier = acc_gain / 100.0
+    sustained_game_signal = raw_sustained * acc_multiplier
+    
+    # If sustained signal clips in-game, there is NO headroom for transients (flatlined)
+    game_clip_sustained = min(sustained_game_signal, 1.0)
+    headroom = max(0.0, 1.0 - game_clip_sustained)
+    
+    transient_game_signal = min(raw_transient * acc_multiplier, headroom)
+    total_game_signal = game_clip_sustained + transient_game_signal
+    acc_is_clipping = (sustained_game_signal + raw_transient * acc_multiplier) >= 1.0
 
-# --- PEAK DYNAMIC RESISTANCE CALCULATION ---
-peak_friction_nm = 0.05 * (moza_friction / 100.0) * max_torque_nm
-peak_damper_nm = 0.015 * (moza_damper / 100.0) * wheel_velocity
-peak_inertia_nm = 0.008 * (moza_inertia / 100.0) * wheel_acceleration
+    # STEP 2: Wheelbase DSP & Equalizer Application
+    base_scalar = moza_ffb / 100.0
+    road_sens_scalar = moza_road_sens / 10.0
+    
+    # EQ only amplifies the TRANSIENT part of the signal (AC wave), not the sustained part (DC wave)
+    eq_low_multiplier = (eq_low_hz / 100.0)
+    eq_high_multiplier = (eq_high_hz / 100.0)
+    avg_eq_boost = ((eq_low_multiplier + eq_high_multiplier) / 2.0) * road_sens_scalar
+    
+    dsp_sustained_nm = game_clip_sustained * base_scalar * max_torque_nm
+    dsp_transient_nm = (transient_game_signal * avg_eq_boost) * base_scalar * max_torque_nm
+    requested_total_nm = dsp_sustained_nm + dsp_transient_nm
 
-peak_mechanical_resistance = peak_friction_nm + peak_damper_nm + peak_inertia_nm
+    # STEP 3: ACC Dynamic Damping (High speed adds damper tax)
+    active_dyn_damper = (acc_dynamic_damping / 100.0) * (0.02 * wheel_velocity * speed_factor) * max_torque_nm
+    current_budget = max(0.0, available_ffb_budget - active_dyn_damper)
 
-st.header("⚙️ Worst-Case Mechanical Overhead")
-st.info(f"During maximum wheel snap, the motor uses **{peak_mechanical_resistance:.2f} Nm** just to overcome internal mechanical processing limits before it can deliver game FFB.")
+    # STEP 4: Motor Hardware Output & Clipping
+    final_output_nm = min(requested_total_nm, current_budget)
+    hardware_is_clipping = requested_total_nm > current_budget
+    
+    return {
+        "acc_clip": acc_is_clipping,
+        "hw_clip": hardware_is_clipping,
+        "acc_signal": total_game_signal,
+        "dsp_sustained": dsp_sustained_nm,
+        "dsp_transient": dsp_transient_nm,
+        "dyn_damp_tax": active_dyn_damper,
+        "requested_nm": requested_total_nm,
+        "final_nm": final_output_nm,
+        "lost_to_hw_clip": max(0.0, requested_total_nm - current_budget)
+    }
 
-# --- SECTION 1: ISOLATED TRACK SURFACE TRANSIENT POOL ---
-st.header("🪨 Isolated Track Surface Transient Pool")
-transient_cols = st.columns(4)
+# --- SECTION 1: SCENARIO RENDERER ---
+st.markdown("---")
+st.header("🏁 Dynamic Telemetry Scenarios")
 
-curb_strike_nm = (0.60 * base_scalar * max_torque_nm) + hz_25_force + hz_40_force + peak_mechanical_resistance
-med_curb_nm = (0.35 * base_scalar * max_torque_nm) + hz_25_force + peak_mechanical_resistance
-sausage_curb_nm = (0.85 * base_scalar * max_torque_nm) + (hz_25_force * 1.5) + peak_mechanical_resistance
-rumble_strip_nm = (0.20 * base_scalar * max_torque_nm) + hz_40_force + hz_60_force + peak_mechanical_resistance
-
-def display_metric(col, label, val):
-    if val >= max_torque_nm:
-        col.error(f"{label}\n\n💥 {max_torque_nm:.2f} Nm (CLIPPED)")
-    else:
-        col.success(f"{label}\n\n⚖️ {val:.2f} Nm")
-
-display_metric(transient_cols[0], "Severe Curb Strike", curb_strike_nm)
-display_metric(transient_cols[1], "Medium Curb Passage", med_curb_nm)
-display_metric(transient_cols[2], "Sausage Curb Impact", sausage_curb_nm)
-display_metric(transient_cols[3], "Rumble Strip Vibration", rumble_strip_nm)
-
-# --- SECTION 2: CORE CORNERING SPEEDS & PHASES ---
-scenarios = {
-    "Slow Speed Corners": {"speed_factor": 0.25, "telemetry": [0.45, 0.38, 0.55, 0.28]},
-    "Medium Speed Corners": {"speed_factor": 0.65, "telemetry": [0.75, 0.60, 0.88, 0.48]},
-    "High Speed Corners": {"speed_factor": 1.00, "telemetry": [0.95, 0.72, 1.10, 0.60]}
-}
-
-phase_definitions = [
-    {"name": "Max front tire grip", "hz_components": ["15Hz"], "hz_val": lambda: hz_15_force},
-    {"name": "First stage of losing front grip", "hz_components": ["15Hz", "100Hz"], "hz_val": lambda: (hz_15_force * 0.7) + hz_100_force},
-    {"name": "Just before loss of front tire grip", "hz_components": ["15Hz", "60Hz"], "hz_val": lambda: hz_15_force + hz_60_force},
-    {"name": "Losing rear tire grip (Snap Oversteer)", "hz_components": ["60Hz", "100Hz"], "hz_val": lambda: hz_60_force + (hz_100_force * 1.3)}
+scenarios = [
+    {"name": "High-Speed Corner (Pouhon)", "sustained": 1.10, "transient": 0.20, "speed": 1.0},
+    {"name": "Low-Speed Hairpin", "sustained": 0.45, "transient": 0.10, "speed": 0.2},
+    {"name": "Sausage Curb Strike", "sustained": 0.30, "transient": 1.40, "speed": 0.6},
+    {"name": "Snap Oversteer (Violent Catch)", "sustained": 0.15, "transient": 0.90, "speed": 0.5}
 ]
 
-for speed_zone, zone_data in scenarios.items():
-    st.markdown("---")
-    st.header(f"🏁 {speed_zone} (Worst-Case Load)")
-    v_scale = zone_data["speed_factor"]
-    
-    dyn_damping_nm = 0.15 * (acc_dynamic_damping / 100.0) * v_scale * (wheel_velocity / 5.0)
-    speed_damping_nm = 0.10 * (moza_speed_damp / 100.0) * v_scale * (wheel_velocity / 5.0)
-    
-    cols = st.columns(4)
-    for idx, phase in enumerate(phase_definitions):
-        with cols[idx]:
-            raw_tel_pct = zone_data["telemetry"][idx]
-            base_active_nm = raw_tel_pct * base_scalar * max_torque_nm
-            hz_addition = phase["hz_val"]()
-            
-            if "Oversteer" in phase['name']:
-                total_res_nm = peak_mechanical_resistance + dyn_damping_nm + speed_damping_nm
-            else:
-                total_res_nm = peak_friction_nm + (peak_damper_nm * 0.2) + dyn_damping_nm + speed_damping_nm
+cols = st.columns(4)
 
-            combined_nm = base_active_nm + hz_addition + total_res_nm
-            clipped = combined_nm >= max_torque_nm
-            final_output_nm = min(combined_nm, max_torque_nm)
+for idx, scene in enumerate(scenarios):
+    res = simulate_ffb_pipeline(scene["sustained"], scene["transient"], scene["speed"])
+    
+    with cols[idx]:
+        st.markdown(f"**{scene['name']}**")
+        
+        # Display Status
+        if res["acc_clip"]:
+            st.error("🟥 ACC SOFTWARE CLIPPING\n\nSignal flatlined in game. No EQ boosts possible.")
+        elif res["hw_clip"]:
+            st.warning(f"🟧 BASE HARDWARE CLIPPING\n\nMotor lacks {res['lost_to_hw_clip']:.2f} Nm to render details.")
+        else:
+            st.success("🟩 CLEAN SIGNAL\n\nFull dynamic range rendered.")
             
-            st.markdown(f"**{phase['name']}**")
-            if clipped:
-                st.error(f"💥 OVERALL FORCE: {final_output_nm:.3f} Nm (CLIPPING)")
-                st.caption(f"↳ Raw Requirement: {combined_nm:.2f} Nm")
-            else:
-                st.success(f"⚖️ OVERALL FORCE: {final_output_nm:.3f} Nm")
-                
-            st.caption(f"↳ Base Telemetry: {base_active_nm:.2f} Nm")
-            st.caption(f"↳ Active EQ Spikes: {hz_addition:.2f} Nm")
-            st.caption(f"↳ Mech. Resistance: {total_res_nm:.2f} Nm")
-            st.progress(final_output_nm / max_torque_nm)
+        # Final Force Metric
+        st.metric(label="Delivered Feedback", value=f"{res['final_nm']:.2f} Nm")
+        
+        # Breakdown
+        st.caption(f"**Signal Pipeline Data:**")
+        st.caption(f"↳ Game Output Signal: **{res['acc_signal']*100:.0f}%**")
+        st.caption(f"↳ Base Corner Force: **{res['dsp_sustained']:.2f} Nm**")
+        st.caption(f"↳ EQ Transient Spikes: **{res['dsp_transient']:.2f} Nm**")
+        st.caption(f"↳ Dyn. Damper Tax: **{res['dyn_damp_tax']:.2f} Nm**")
+        
+        # Visual Progress Bar for Motor Capacity
+        usage_pct = min(res['final_nm'] / max_torque_nm, 1.0)
+        st.progress(usage_pct)
 
-# --- SECTION 3: STRAIGHT LINE STATES (RESTORED) ---
+# --- SECTION 2: DEEP DIVE ANALYTICS ---
 st.markdown("---")
-st.header("🛑 Straight-Line / Transition States")
-col_straight = st.columns(2)
+st.header("📊 Worst-Case Constructive Interference (Telemetry Insight)")
 
-with col_straight[0]:
-    brake_base_nm = 0.35 * base_scalar * max_torque_nm
-    # Forward weight transfer creates resistance to rapid initial wheel movement
-    brake_res_nm = peak_friction_nm + (peak_damper_nm * 0.3) + (0.05 * max_torque_nm)
-    total_brake_nm = min(brake_base_nm + hz_15_force + brake_res_nm, max_torque_nm)
-    
-    st.markdown("**Braking Weight Transfer (15Hz Load)**")
-    if total_brake_nm >= max_torque_nm:
-        st.error(f"💥 OVERALL FORCE: {total_brake_nm:.3f} Nm (CLIPPING)")
-    else:
-        st.info(f"⚡ OVERALL FORCE: {total_brake_nm:.3f} Nm")
-    st.caption(f"↳ Active Telemetry & 15Hz: {brake_base_nm + hz_15_force:.2f} Nm | Resistance: {brake_res_nm:.2f} Nm")
-    st.progress(total_brake_nm / max_torque_nm)
+st.markdown("""
+This chart visualizes what happens during the **Sausage Curb Strike** scenario. 
+Notice how mechanical overhead and ACC's software limit interact with the equalizer. If ACC clips at the software level, the blue "EQ Transients" bar will disappear, simulating a muddy, flatlined FFB feeling.
+""")
 
-with col_straight[1]:
-    bump_base_nm = 0.30 * base_scalar * max_torque_nm
-    # Sudden suspension deflections heavily spike wheel acceleration, maximizing inertia resistance
-    bump_res_nm = peak_friction_nm + peak_inertia_nm + (0.10 * max_torque_nm)
-    total_bump_nm = min(bump_base_nm + hz_25_force + bump_res_nm, max_torque_nm)
-    
-    st.markdown("**Suspension Bumps / Dips (25Hz Load)**")
-    if total_bump_nm >= max_torque_nm:
-        st.error(f"💥 OVERALL FORCE: {total_bump_nm:.3f} Nm (CLIPPING)")
-    else:
-        st.info(f"⚡ OVERALL FORCE: {total_bump_nm:.3f} Nm")
-    st.caption(f"↳ Active Telemetry & 25Hz: {bump_base_nm + hz_25_force:.2f} Nm | Resistance: {bump_res_nm:.2f} Nm")
-    st.progress(total_bump_nm / max_torque_nm)
+# Fetching the Sausage Curb data for visualization
+curb_data = simulate_ffb_pipeline(0.30, 1.40, 0.6)
+
+chart_data = pd.DataFrame({
+    "Torque Allocation": [
+        "Mechanical Tax (Friction/Inertia)", 
+        "Dynamic Damper Tax",
+        "Sustained Physics Force", 
+        "EQ Transient Spikes", 
+        "Lost to Hardware Clipping"
+    ],
+    "Nm": [
+        total_mech_tax,
+        curb_data["dyn_damp_tax"],
+        curb_data["dsp_sustained"],
+        curb_data["dsp_transient"] if not curb_data["acc_clip"] else 0.0,
+        curb_data["lost_to_hw_clip"]
+    ]
+})
+
+st.bar_chart(chart_data.set_index("Torque Allocation"))
