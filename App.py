@@ -20,22 +20,23 @@ st.info("👈 **Tuning Controls are located in the Left Sidebar Panel.** Click t
 st.markdown("---")
 
 # --- TWO-WAY VALUE SYNCHRONIZATION INITIALIZATION ---
+# Preset defaults optimized for a 3.9Nm Wheelbase to maximize strength & tactile fall-off
 variables = {
     "max_torque": (3.9, 2.0, 25.0, 0.1),
     "moza_torque_limit": (100, 0, 100, 1),
     "acc_gain": (95, 0, 100, 1),
-    "acc_dynamic_damping": (100, 0, 100, 1),
+    "acc_dynamic_damping": (60, 0, 100, 1),
     "moza_ffb": (100, 0, 100, 1),
-    "moza_road_sens": (10, 0, 10, 1),
+    "moza_road_sens": (8, 0, 10, 1),
     "eq_10": (100, 0, 500, 10),
-    "eq_15": (150, 0, 500, 10),
+    "eq_15": (100, 0, 500, 10),
     "eq_25": (100, 0, 500, 10),
-    "eq_40": (100, 0, 500, 10),
-    "eq_60": (100, 0, 500, 10),
+    "eq_40": (120, 0, 500, 10),
+    "eq_60": (120, 0, 500, 10),
     "eq_100": (100, 0, 500, 10),
-    "moza_inertia": (200, 100, 500, 10),
-    "moza_damper": (40, 0, 100, 1),
-    "moza_friction": (15, 0, 100, 1)
+    "moza_inertia": (100, 100, 500, 10),
+    "moza_damper": (15, 0, 100, 1),
+    "moza_friction": (5, 0, 100, 1)
 }
 
 for var, specs in variables.items():
@@ -51,7 +52,6 @@ def sync_input_to_slider(var_name):
     st.session_state[f"{var_name}_slider"] = st.session_state[f"{var_name}_input"]
 
 def render_param_row(label, var_name, min_v, max_v, step_v, help_text=None):
-    # Dynamically determine formatting to prevent Streamlit step-validation glitches
     is_float = isinstance(step_v, float)
     fmt = "%.1f" if is_float else "%d"
     
@@ -71,7 +71,6 @@ def render_param_row(label, var_name, min_v, max_v, step_v, help_text=None):
             on_change=sync_input_to_slider, args=(var_name,), label_visibility="collapsed"
         )
         
-    # Safest to return the absolute session state value to guarantee math uses the synced value
     return st.session_state[f"{var_name}_slider"]
 
 # --- SIDEBAR: PIPELINE CONFIGURATION ---
@@ -107,7 +106,7 @@ moza_damper = render_param_row("Wheel Damper (%)", "moza_damper", 0, 100, 1)
 moza_friction = render_param_row("Wheel Friction (%)", "moza_friction", 0, 100, 1)
 
 
-# --- CORE SIMULATION PIPELINE ENGINE (SUPER ACCURATE PHYSICS) ---
+# --- CORE SIMULATION PIPELINE ENGINE ---
 def simulate_ffb_pure(raw_sustained, raw_transient, car_speed, wheel_vel, wheel_accel, eq_weights,
                       max_tq, tq_limit, a_gain, a_dyn_damp, m_ffb, m_road,
                       e10, e15, e25, e40, e60, e100, m_inertia, m_damper, m_friction):
@@ -141,31 +140,21 @@ def simulate_ffb_pure(raw_sustained, raw_transient, car_speed, wheel_vel, wheel_
     base_motor_sustained = usb_sustained * base_scalar * effective_max_torque
     base_motor_transient = usb_transient * weighted_eq * base_scalar * effective_max_torque
 
-    # 4. Realistic Non-Linear Mechanical Resistance Models
-    # Friction: Static drag (Coulomb)
+    # 4. Mechanical Resistance Models
     tax_friction = (m_friction / 100.0) * (0.02 * effective_max_torque)
-    
-    # Damper: Viscous resistance (exponentially decays at high velocities to prevent infinite limits)
     vel_factor = 1.0 - math.exp(-abs(wheel_vel) / 20.0)
     tax_damper = (m_damper / 100.0) * vel_factor * (effective_max_torque * 0.15) 
-    
-    # Inertia: Newton's Second Law (Linear proportion to Acceleration)
     tax_inertia = (m_inertia / 100.0) * (abs(wheel_accel) / 100.0) * (effective_max_torque * 0.20)
-    
-    # ACC Dynamic Damper: Speed-sensitive gyro effect (also viscous)
     tax_dyn_damper = (a_dyn_damp / 100.0) * abs(car_speed) * vel_factor * (effective_max_torque * 0.15)
     
     total_mech_tax = tax_friction + tax_damper + tax_inertia + tax_dyn_damper
     
     # 5. Gross Motor Workload vs Hardware Saturation
-    # The motor must produce enough force to combat internal mechanics AND provide game FFB
     gross_motor_demand = base_motor_sustained + base_motor_transient + total_mech_tax
-    actual_motor_output = min(gross_motor_demand, effective_max_torque)
     hardware_is_clipping = gross_motor_demand > effective_max_torque
     lost_to_hw_clip = max(0.0, gross_motor_demand - effective_max_torque)
     
-    # 6. Signal Degradation Hierarchy (Net Driver Feedback)
-    # When a servo clips, it sacrifices high-frequency AC transients FIRST, before sacrificing DC sustained forces.
+    # 6. Signal Degradation Hierarchy
     delivered_transient = max(0.0, base_motor_transient - lost_to_hw_clip)
     remaining_loss_for_sustained = max(0.0, lost_to_hw_clip - base_motor_transient)
     delivered_sustained = max(0.0, base_motor_sustained - remaining_loss_for_sustained)
@@ -200,9 +189,9 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
         moza_inertia, moza_damper, moza_friction
     )
 
-# --- SECTION 1: SCENARIO RENDERER ---
+# --- SECTION 1: SCENARIO RENDERER (UPDATED TO TWO PHASES) ---
 st.header("🏁 Dynamic Telemetry Scenarios")
-st.markdown("Simulates 3 chronological phases per corner, determining how **Gross Demand** pushes your hardware to the brink.")
+st.markdown("Simulates the transition between peak grip and tire slip to analyze dynamic force drop-offs.")
 
 scenarios = [
     {
@@ -210,9 +199,8 @@ scenarios = [
         "has_bucket": True,
         "eq_weights": {"10Hz": 0.4, "15Hz": 0.3, "25Hz": 0.1, "40Hz": 0.1, "60Hz": 0.1, "100Hz": 0.0}, 
         "phases": [
-            {"name": "Peak Grip", "sustained": 0.55, "transient": 0.05, "car_speed": 0.2, "w_vel": 5.0, "w_accel": 5.0},
-            {"name": "Edge of Losing Grip", "sustained": 0.60, "transient": 0.15, "car_speed": 0.2, "w_vel": 8.0, "w_accel": 10.0},
-            {"name": "Losing Grip (Slide)", "sustained": 0.35, "transient": 0.25, "car_speed": 0.2, "w_vel": 12.0, "w_accel": 20.0} 
+            {"name": "Highest Peak of Grip", "sustained": 0.65, "transient": 0.10, "car_speed": 0.2, "w_vel": 5.0, "w_accel": 5.0},
+            {"name": "Loss of Grip (Slide)", "sustained": 0.35, "transient": 0.15, "car_speed": 0.2, "w_vel": 12.0, "w_accel": 20.0} 
         ]
     },
     {
@@ -220,9 +208,8 @@ scenarios = [
         "has_bucket": True,
         "eq_weights": {"10Hz": 0.3, "15Hz": 0.3, "25Hz": 0.2, "40Hz": 0.1, "60Hz": 0.1, "100Hz": 0.0},
         "phases": [
-            {"name": "Peak Grip", "sustained": 0.85, "transient": 0.10, "car_speed": 0.6, "w_vel": 3.0, "w_accel": 5.0},
-            {"name": "Edge of Losing Grip", "sustained": 0.90, "transient": 0.20, "car_speed": 0.6, "w_vel": 6.0, "w_accel": 12.0},
-            {"name": "Losing Grip (Understeer)", "sustained": 0.45, "transient": 0.35, "car_speed": 0.6, "w_vel": 8.0, "w_accel": 15.0} 
+            {"name": "Highest Peak of Grip", "sustained": 0.85, "transient": 0.15, "car_speed": 0.5, "w_vel": 4.0, "w_accel": 6.0},
+            {"name": "Loss of Grip (Understeer)", "sustained": 0.50, "transient": 0.20, "car_speed": 0.5, "w_vel": 9.0, "w_accel": 14.0} 
         ]
     },
     {
@@ -230,9 +217,8 @@ scenarios = [
         "has_bucket": True,
         "eq_weights": {"10Hz": 0.2, "15Hz": 0.2, "25Hz": 0.3, "40Hz": 0.2, "60Hz": 0.1, "100Hz": 0.0},
         "phases": [
-            {"name": "Peak Grip", "sustained": 1.15, "transient": 0.15, "car_speed": 1.0, "w_vel": 1.0, "w_accel": 2.0},
-            {"name": "Edge of Losing Grip", "sustained": 1.25, "transient": 0.25, "car_speed": 1.0, "w_vel": 3.0, "w_accel": 8.0},
-            {"name": "Losing Grip (Scrub)", "sustained": 0.60, "transient": 0.45, "car_speed": 1.0, "w_vel": 6.0, "w_accel": 15.0} 
+            {"name": "Highest Peak of Grip", "sustained": 1.20, "transient": 0.20, "car_speed": 1.0, "w_vel": 2.0, "w_accel": 4.0},
+            {"name": "Loss of Grip (Scrub)", "sustained": 1.10, "transient": 0.25, "car_speed": 1.0, "w_vel": 5.0, "w_accel": 10.0} 
         ]
     },
     {
@@ -240,9 +226,8 @@ scenarios = [
         "has_bucket": False,
         "eq_weights": {"10Hz": 0.2, "15Hz": 0.1, "25Hz": 0.4, "40Hz": 0.2, "60Hz": 0.1, "100Hz": 0.0}, 
         "phases": [
-            {"name": "Initial Hit (ABS Engages)", "sustained": 0.15, "transient": 0.70, "car_speed": 0.9, "w_vel": 1.0, "w_accel": 5.0}, 
-            {"name": "Trail Braking (Turn-in)", "sustained": 0.45, "transient": 0.30, "car_speed": 0.6, "w_vel": 8.0, "w_accel": 10.0}, 
-            {"name": "Brake Release (Mid-Corner)", "sustained": 0.65, "transient": 0.10, "car_speed": 0.5, "w_vel": 3.0, "w_accel": 5.0}
+            {"name": "Initial Hit (ABS Engages)", "sustained": 0.20, "transient": 0.80, "car_speed": 0.9, "w_vel": 1.0, "w_accel": 5.0}, 
+            {"name": "Trail Braking (Turn-in)", "sustained": 0.65, "transient": 0.15, "car_speed": 0.6, "w_vel": 8.0, "w_accel": 10.0}
         ]
     },
     {
@@ -250,8 +235,7 @@ scenarios = [
         "has_bucket": False,
         "eq_weights": {"10Hz": 0.3, "15Hz": 0.2, "25Hz": 0.1, "40Hz": 0.2, "60Hz": 0.2, "100Hz": 0.0}, 
         "phases": [
-            {"name": "Initial Snap (Rear Lets Go)", "sustained": 0.10, "transient": 0.40, "car_speed": 0.6, "w_vel": 8.0, "w_accel": 30.0}, 
-            {"name": "Violent Catch (Tires Bite)", "sustained": 0.90, "transient": 0.80, "car_speed": 0.5, "w_vel": 25.0, "w_accel": 80.0}, 
+            {"name": "Violent Catch (Tires Bite)", "sustained": 0.95, "transient": 0.85, "car_speed": 0.5, "w_vel": 25.0, "w_accel": 80.0}, 
             {"name": "Stabilization (Recovery)", "sustained": 0.50, "transient": 0.20, "car_speed": 0.4, "w_vel": 10.0, "w_accel": 15.0}
         ]
     },
@@ -260,9 +244,8 @@ scenarios = [
         "has_bucket": False,
         "eq_weights": {"10Hz": 0.0, "15Hz": 0.2, "25Hz": 0.1, "40Hz": 0.2, "60Hz": 0.3, "100Hz": 0.2}, 
         "phases": [
-            {"name": "Initial Strike (Impact)", "sustained": 0.30, "transient": 1.50, "car_speed": 0.7, "w_vel": 10.0, "w_accel": 50.0},
-            {"name": "Riding the Curb", "sustained": 0.25, "transient": 0.90, "car_speed": 0.7, "w_vel": 15.0, "w_accel": 20.0},
-            {"name": "Dropping Off", "sustained": 0.40, "transient": 1.20, "car_speed": 0.7, "w_vel": 12.0, "w_accel": 40.0}
+            {"name": "Initial Strike (Impact)", "sustained": 0.35, "transient": 1.60, "car_speed": 0.7, "w_vel": 10.0, "w_accel": 50.0},
+            {"name": "Riding the Curb", "sustained": 0.30, "transient": 0.90, "car_speed": 0.7, "w_vel": 15.0, "w_accel": 20.0}
         ]
     }
 ]
@@ -278,14 +261,17 @@ for idx, scene in enumerate(scenarios):
         res["phase_name"] = p["name"]
         phase_results.append(res)
         
-    worst_res = max(phase_results, key=lambda x: x["final_nm"])
+    # FIX: Check compliance across all active phases to prevent false "Clean" signals
+    any_acc_clip = any(r["acc_clip"] for r in phase_results)
+    any_hw_clip = any(r["hw_clip"] for r in phase_results)
+    worst_res = max(phase_results, key=lambda x: x["gross_demand_nm"])
     
     with all_cols[idx]:
         st.markdown(f"### {scene['name']}")
         
-        if worst_res["acc_clip"]:
+        if any_acc_clip:
             st.error("🟥 ACC SOFTWARE CLIPPING\n\nUSB Signal flatlined. EQ boosts severely muted.")
-        elif worst_res["hw_clip"]:
+        elif any_hw_clip:
             st.warning(f"🟧 HARDWARE CLIPPING\n\nMotor is overloaded by {worst_res['lost_to_hw_clip']:.2f} Nm. Transients crushed.")
         else:
             st.success("🟩 CLEAN SIGNAL\n\nFull dynamic range rendered flawlessly.")
@@ -293,19 +279,28 @@ for idx, scene in enumerate(scenarios):
         st.metric(label="Net Delivered Game Force", value=f"{worst_res['final_nm']:.2f} Nm")
         
         if scene["has_bucket"]:
-            edge_nm = phase_results[1]["final_nm"]
-            loss_nm = phase_results[2]["final_nm"]
-            bucket_delta = edge_nm - loss_nm
-            st.metric(
-                label="🪣 Tactile Reaction Bucket", 
-                value=f"{bucket_delta:.2f} Nm Drop", 
-                delta=f"-{((bucket_delta)/max(0.1, edge_nm))*100:.0f}% Dynamic Falloff",
-                delta_color="inverse"
-            )
+            peak_nm = phase_results[0]["final_nm"]
+            loss_nm = phase_results[1]["final_nm"]
+            bucket_delta = peak_nm - loss_nm
+            
+            if peak_nm > loss_nm and bucket_delta > 0.01:
+                st.metric(
+                    label="🪣 Tactile Reaction Bucket", 
+                    value=f"{bucket_delta:.2f} Nm Drop", 
+                    delta=f"-{((bucket_delta)/max(0.1, peak_nm))*100:.0f}% Dynamic Falloff",
+                    delta_color="inverse"
+                )
+            else:
+                st.metric(
+                    label="🪣 Tactile Reaction Bucket", 
+                    value="0.00 Nm Drop", 
+                    delta="0% (Ceiling Saturated)",
+                    delta_color="normal"
+                )
             st.caption("*(The larger this drop-off, the easier it is to physically feel and catch a slide.)*")
 
-        if worst_res["hw_clip"]:
-            st.caption(f"⚠️ *Note: The motor is operating at 100% capacity. Feedback is compromised because **{worst_res['total_tax']:.2f} Nm** is being wasted purely fighting your internal damping/friction settings.*")
+        if any_hw_clip:
+            st.caption(f"⚠️ *Note: Motor at capacity. Feedback is compromised because **{worst_res['total_tax']:.2f} Nm** is wasted fighting internal damping/friction settings.*")
         
         st.markdown("**Dominant FFB Equalizer Bands:**")
         active_bands = [f"{k} ({v*100:.0f}%)" for k, v in scene["eq_weights"].items() if v > 0]
@@ -347,9 +342,9 @@ Below is a live volume sweep of your current EQ configuration during a curb stri
 curb_weights = {"10Hz": 0.0, "15Hz": 0.2, "25Hz": 0.1, "40Hz": 0.2, "60Hz": 0.3, "100Hz": 0.2}
 
 acc_multiplier = acc_gain / 100.0
-usb_sustained = min(0.30 * acc_multiplier, 1.0)
+usb_sustained = min(0.35 * acc_multiplier, 1.0)
 headroom = max(0.0, 1.0 - usb_sustained)
-usb_transient = min(1.50 * acc_multiplier, headroom)
+usb_transient = min(1.60 * acc_multiplier, headroom)
 
 effective_max_torque = max_torque_nm * (moza_torque_limit / 100.0)
 base_scalar = moza_ffb / 100.0
@@ -380,7 +375,6 @@ for mult in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]:
     test_gross_demand = base_motor_sustained + test_base_transient + total_mech_tax
     test_lost = max(0.0, test_gross_demand - effective_max_torque)
     
-    # Sacrifice hierarchy (transients die first)
     test_delivered_transient = max(0.0, test_base_transient - test_lost)
     test_remaining_loss = max(0.0, test_lost - test_base_transient)
     test_delivered_sustained = max(0.0, base_motor_sustained - test_remaining_loss)
@@ -426,7 +420,6 @@ st.markdown("""
 **V. Telemetry Ceiling Integrity:** The combined output of ACC's physics applies master gain scaling *prior* to clipping, guaranteeing it can never bypass the 16-bit USB protocol limits.
 """, unsafe_allow_html=True)
 
-# Helper function to prevent python float rounding bugs (e.g. 8.0000000001 != 8.0) 
 def check_match(val1, val2, tolerance=0.001):
     return abs(val1 - val2) <= tolerance
 
@@ -460,7 +453,7 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
     else:
         st.error(f"❌ **Test 2 Failed** - Engine Output: {res2['acc_signal']}")
 
-    # Test 3: Hardware Clipping Envelope Checks (Reconfigured inputs to correctly force a hardware limit clip)
+    # Test 3: Hardware Clipping Envelope Checks
     res3 = simulate_ffb_pure(
         raw_sustained=0.5, raw_transient=0.5, car_speed=1.0, wheel_vel=0.0, wheel_accel=0.0, 
         eq_weights={"10Hz":1.0}, max_tq=5.0, tq_limit=100.0, a_gain=100.0, a_dyn_damp=0.0, 
@@ -480,9 +473,8 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
         m_ffb=100.0, m_road=10.0, e10=100.0, e15=100.0, e25=100.0, e40=100.0, e60=100.0, e100=100.0, 
         m_inertia=0.0, m_damper=100.0, m_friction=0.0
     )
-    # A maxed 100% damper on a 10Nm wheel at infinite speed should plateau exactly at 1.5 Nm tax.
     if check_match(res4["tax_damper"], 1.5, tolerance=0.01):
-        st.success("✅ **Test 4: Viscous Resistance Plateau** - Extreme wheel velocities correctly plateaued via exponential decay math (maxing at exactly 1.5 Nm tax), proving dampers do not scale into infinity.")
+        st.success("✅ **Test 4: Viscous Resistance Plateau** - Extreme wheel velocities correctly plateaued via exponential decay math.")
         tests_passed += 1
     else:
         st.error(f"❌ **Test 4 Failed** - Engine Output: {res4['tax_damper']:.2f}")
@@ -495,12 +487,12 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
         m_inertia=100.0, m_damper=100.0, m_friction=100.0
     )
     if res5["total_tax"] > 0 and res5["tax_damper"] > 0 and res5["tax_inertia"] > 0:
-        st.success("✅ **Test 5: Energy Conservation** - Negative telemetry kinematics correctly evaluate as absolute resistance taxes rather than generating phantom positive forces.")
+        st.success("✅ **Test 5: Energy Conservation** - Negative telemetry kinematics evaluate as absolute resistance taxes.")
         tests_passed += 1
     else:
         st.error("❌ **Test 5 Failed**")
 
-    # Test 6: Tactile Saturation (Set inertia to 0 to provide a clean environment for testing pure signal saturation)
+    # Test 6: Tactile Saturation
     res6 = simulate_ffb_pure(
         raw_sustained=1.2, raw_transient=0.5, car_speed=1.0, wheel_vel=1.0, wheel_accel=1.0,
         eq_weights={"10Hz":1.0}, max_tq=10.0, tq_limit=100.0, a_gain=100.0, a_dyn_damp=0.0,
@@ -508,7 +500,7 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
         m_inertia=0.0, m_damper=0.0, m_friction=0.0
     )
     if check_match(res6["base_transient"], 0.0) and check_match(res6["final_nm"], res6["effective_torque"]):
-        st.success("✅ **Test 6: Software Saturation Law** - Sustained >100% capacity correctly crushed transient USB headroom to 0.0 Nm, mathematically proving EQ boosts do nothing during clipping.")
+        st.success("✅ **Test 6: Software Saturation Law** - Sustained >100% capacity crushed transient USB headroom to 0.0 Nm.")
         tests_passed += 1
     else:
         st.error(f"❌ **Test 6 Failed** - Transient Output: {res6['base_transient']} Nm")
@@ -521,12 +513,12 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
         m_inertia=0.0, m_damper=0.0, m_friction=0.0
     )
     if check_match(res7["acc_signal"], 0.8) and check_match(res7["final_nm"], 16.0) and res7["acc_clip"] == False:
-        st.success("✅ **Test 7: Proportional Gain Scaling** - A 50% Game Gain correctly compresses a 160% raw physics demand down into a clean 80% USB signal.")
+        st.success("✅ **Test 7: Proportional Gain Scaling** - A 50% Game Gain compresses a 160% raw physics demand safely.")
         tests_passed += 1
     else:
         st.error(f"❌ **Test 7 Failed** - Output: {res7['final_nm']} Nm")
         
-    # Test 8: Signal Degradation Hierarchy (Bypassed Software Clipper to accurately test Hardware Clipper prioritization)
+    # Test 8: Signal Degradation Hierarchy
     res8 = simulate_ffb_pure(
         raw_sustained=0.8, raw_transient=0.2, car_speed=1.0, wheel_vel=0.0, wheel_accel=0.0,
         eq_weights={"10Hz":1.0}, max_tq=10.0, tq_limit=100.0, a_gain=100.0, a_dyn_damp=0.0,
@@ -534,10 +526,10 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
         m_inertia=0.0, m_damper=0.0, m_friction=0.0
     )
     if check_match(res8["delivered_transient"], 2.0) and check_match(res8["base_sustained"], 8.0):
-        st.success("✅ **Test 8: Signal Degradation Hierarchy** - Hardware ceiling strictly sacrificed the high-frequency transients first before reducing the DC cornering weights.")
+        st.success("✅ **Test 8: Signal Degradation Hierarchy** - Hardware ceiling strictly sacrificed high-frequency transients first.")
         tests_passed += 1
     else:
-        st.error(f"❌ **Test 8 Failed** - Sustained: {res8['base_sustained']} | Transient: {res8['delivered_transient']}")
+        st.error(f"❌ **Test 8 Failed**")
 
     if tests_passed == total_tests:
-        st.info("🎯 **STATUS:** All 8 underlying physics models and mathematical constraints successfully validated and factual.")
+        st.info("🎯 **STATUS:** All underlying physics models and mathematical constraints successfully validated.")
