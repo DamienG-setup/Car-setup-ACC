@@ -210,17 +210,14 @@ for idx, scene in enumerate(scenarios):
         st.markdown("---")
 
 # --- SECTION 2: DEEP DIVE ANALYTICS ---
-st.header("📊 EQ Responsiveness & Tactile Numbness Analysis (Curb Strike)")
+st.header("📊 Curb Strike Impact: Hardware Clipping & Tactile Numbness")
 
 st.markdown("""
-When FFB clipping occurs, cranking up your wheelbase Equalizer (EQ) sliders results in **total tactile numbness**. 
-Because the signal pipeline is already saturated, boosting the audio-frequency sliders demands detail that the hardware cannot physically output, meaning changes have zero impact at your hands.
+When you hit a harsh curb, the physics engine generates a massive, violent transient force. If your current settings cause this force to exceed your wheelbase's peak torque capacity, the motor hits an absolute electronic ceiling and triggers **Hardware Clipping**.
 
-This analysis runs a hypothetical volume sweep of your current EQ configuration from **50% up to 250%** during a violent curb strike impact:
-* **Requested Detail (Blue Line):** Shows what the equalizer signal *wants* to send to the motor bindings.
-* **Delivered Force (Orange Line):** The actual torque that survives filters and makes it to your hands.
+Because the wheelbase is already working at 100% maximum effort just to output the raw slam of the curb, it has zero power left to give. Any fine texture or detail boosts coming from your **wheelbase EQ sliders get chopped off at the ceiling**. No matter how high you crank up your EQ settings, the physical torque output cannot change—resulting in absolute **tactile numbness**.
 
-⚠️ **How to read numbness:** If your setup is clipping, the **Delivered Force** line will turn completely **flat and horizontal** as you track right along the X-axis. This proves that your EQ changes have become totally numb.
+Below is a live volume sweep of your current EQ configuration during a curb strike impact (scaled from 50% up to 250%):
 """)
 
 # Extract current baseline pipeline parameters for a curb strike to sweep dynamically
@@ -252,7 +249,7 @@ tax_inertia = (moza_inertia / 100.0) * (50.0 / 80.0) * (effective_max_torque * 0
 active_dyn_damper = (acc_dynamic_damping / 100.0) * 0.7 * (10.0 / 25.0) * (effective_max_torque * 0.15)
 total_mech_tax = tax_friction + tax_damper + tax_inertia + active_dyn_damper
 
-# Sweep across a fixed array of multipliers to ensure a 100% stable X-axis layout
+# Sweep across numeric values to guarantee a perfectly ordered, non-moving X-axis 
 sweep_data = []
 for mult in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]:
     test_dsp_transient_nm = (transient_game_signal * (base_weighted_eq * mult)) * base_scalar * effective_max_torque
@@ -262,10 +259,16 @@ for mult in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]:
     test_final_output_nm = max(0.0, test_clipped_motor_output - total_mech_tax)
     
     sweep_data.append({
-        "EQ Scaling Level": f"{int(mult * 100)}%",
+        "EQ Scale Factor (%)": int(mult * 100),
         "Requested Detail (Nm)": test_requested_total_nm,
         "Delivered Force (Felt Nm)": test_final_output_nm
     })
     
-df_sweep = pd.DataFrame(sweep_data).set_index("EQ Scaling Level")
+df_sweep = pd.DataFrame(sweep_data).set_index("EQ Scale Factor (%)")
 st.line_chart(df_sweep)
+
+st.markdown("""
+💡 **Visualizing Numbness on the Chart:**
+* **The Blue Line (Requested Detail):** Represents what your audio-frequency EQ sliders are trying to demand as you push them higher.
+* **The Orange Line (Delivered Force):** Represents what actually reaches your hands. If this line goes **completely flat and horizontal**, your wheelbase has hit its physical output ceiling. Adjusting the EQ sliders up or down in this zone changes absolutely nothing on the track—the wheel has gone completely numb.
+""")
