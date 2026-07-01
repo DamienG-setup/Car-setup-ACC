@@ -22,20 +22,20 @@ st.markdown("---")
 # --- TWO-WAY VALUE SYNCHRONIZATION INITIALIZATION ---
 # Format: { var_name: (default, min, max, step) }
 variables = {
-    "max_torque": (9.0, 2.0, 25.0, 0.1),
+    "max_torque": (3.9, 2.0, 25.0, 0.1),
     "moza_torque_limit": (100, 0, 100, 1),
-    "acc_gain": (70, 0, 100, 1),
+    "acc_gain": (95, 0, 100, 1),
     "acc_dynamic_damping": (100, 0, 100, 1),
     "moza_ffb": (100, 0, 100, 1),
-    "moza_road_sens": (8, 0, 10, 1),
-    "eq_15": (120, 0, 500, 10),
-    "eq_25": (120, 0, 500, 10),
-    "eq_40": (130, 0, 500, 10),
-    "eq_60": (130, 0, 500, 10),
-    "eq_100": (130, 0, 500, 10),
-    "moza_inertia": (100, 100, 500, 10),
-    "moza_damper": (20, 0, 100, 1),
-    "moza_friction": (10, 0, 100, 1)
+    "moza_road_sens": (10, 0, 10, 1),
+    "eq_15": (150, 0, 500, 10),
+    "eq_25": (100, 0, 500, 10),
+    "eq_40": (100, 0, 500, 10),
+    "eq_60": (100, 0, 500, 10),
+    "eq_100": (100, 0, 500, 10),
+    "moza_inertia": (200, 100, 500, 10),
+    "moza_damper": (40, 0, 100, 1),
+    "moza_friction": (15, 0, 100, 1)
 }
 
 # Pre-populate session state keys to avoid cross-talk drift
