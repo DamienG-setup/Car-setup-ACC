@@ -209,34 +209,3 @@ for idx, scene in enumerate(scenarios):
             
         st.progress(min(worst_res['final_nm'] / max_torque_nm, 1.0))
         st.markdown("---")
-
-
-# --- SECTION 2: DEEP DIVE ANALYTICS ---
-st.header("📊 Curb Strike Impact: Hardware Clipping & Tactile Numbness")
-
-st.markdown("""
-When you hit a harsh curb, the physics engine generates a massive, violent transient force. If your current settings cause this demand to exceed your wheelbase's peak torque capacity, the motor hits an absolute electronic ceiling and triggers Hardware Clipping.
-
-Similarily, when the game demands a high self-alighning torque (primarily cornering grip) this clipping can occur. 
-""")
-
-# --- RESTORED: TELEMETRY COMPONENT BREAKDOWN TABLE ---
-curb_scenario = scenarios[5]
-curb_weights = curb_scenario["eq_weights"]
-
-breakdown_table_rows = []
-for p in curb_scenario["phases"]:
-    res = simulate_ffb_pipeline(p["sustained"], p["transient"], p["car_speed"], p["w_vel"], p["w_accel"], curb_weights)
-    
-    breakdown_table_rows.append({
-        "Curb Phase": p["name"],
-        "Sustained Base Force": f"{res['dsp_sustained']:.2f} Nm",
-        "Transient EQ Demand": f"{res['dsp_transient']:.2f} Nm",
-        "Total Requested Torque": f"{res['requested_nm']:.2f} Nm",
-        "Mechanical Tax Losses": f"-{res['total_tax']:.2f} Nm",
-        "Final Delivered Feedback": f"{res['final_nm']:.2f} Nm",
-        "Signal Status": "🟥 CLIPPING" if res["hw_clip"] or res["acc_clip"] else "🟩 CLEAN"
-    })
-
-df_breakdown = pd.DataFrame(breakdown_table_rows).set_index("Curb Phase")
-st.table(df_breakdown)
