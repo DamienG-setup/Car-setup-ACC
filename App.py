@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import altair as alt
 
 st.set_page_config(
     page_title="Pro ACC Peak Load Predictor",
@@ -38,6 +37,7 @@ eq_100 = st.sidebar.slider("100 Hz (High Freq Details) (%)", 0, 500, 130, 10)
 
 st.sidebar.header("4️⃣ BASE MECHANICAL PROFILES")
 st.sidebar.markdown("*Set the base resistance percentages of your wheelbase software.*")
+# RESTORED: Moza Pit House hard floor of 100% for physical core mass
 moza_inertia = st.sidebar.slider("Natural Inertia (%)", 100, 500, 100, 10, help="Moza Pit House floor is 100% due to the physical weight of the direct-drive rotor.")
 moza_damper = st.sidebar.slider("Wheel Damper (%)", 0, 100, 20)
 moza_friction = st.sidebar.slider("Wheel Friction (%)", 0, 100, 10)
@@ -210,125 +210,23 @@ for idx, scene in enumerate(scenarios):
         st.progress(min(worst_res['final_nm'] / max_torque_nm, 1.0))
         st.markdown("---")
 
+
 # --- SECTION 2: DEEP DIVE ANALYTICS ---
 st.header("📊 Curb Strike Impact: Hardware Clipping & Tactile Numbness")
 
 st.markdown("""
 When you hit a harsh curb, the physics engine generates a massive, violent transient force. If your current settings cause this demand to exceed your wheelbase's peak torque capacity, the motor hits an absolute electronic ceiling and triggers Hardware Clipping.
 
-Similarily, when the game demands a high self-alighning torque (primarily cornering grip) this clipping can occur.
-
-Because the wheelbase is already working at 100% maximum effort just to output the raw slam of the curb, it has zero power left to give. Any fine texture or detail boosts coming from your **wheelbase EQ sliders get chopped off at the ceiling**. No matter how high you crank up your EQ settings, the physical torque output cannot change—resulting in absolute **tactile numbness**.
-
-Below is a live volume sweep of your current EQ configuration during a curb strike impact (scaled from 50% up to 250%):
+Similarily, when the game demands a high self-alighning torque (primarily cornering grip) this clipping can occur. 
 """)
 
-# Extract current baseline pipeline parameters for a curb strike to sweep dynamically
-curb_weights = {"15Hz": 0.0, "25Hz": 0.1, "40Hz": 0.2, "60Hz": 0.4, "100Hz": 0.3}
+# --- RESTORED: TELEMETRY COMPONENT BREAKDOWN TABLE ---
+curb_scenario = scenarios[5]
+curb_weights = curb_scenario["eq_weights"]
 
-acc_multiplier = acc_gain / 100.0
-sustained_game_signal = 0.30 * acc_multiplier
-game_clip_sustained = min(sustained_game_signal, 1.0)
-headroom = max(0.0, 1.0 - game_clip_sustained)
-transient_game_signal = min(1.50 * acc_multiplier, headroom)
-
-effective_max_torque = max_torque_nm * (moza_torque_limit / 100.0)
-base_scalar = moza_ffb / 100.0
-road_sens_scalar = moza_road_sens / 10.0
-
-base_weighted_eq = (
-    (eq_15 / 100.0) * curb_weights.get("15Hz", 0.0) +
-    (eq_25 / 100.0) * curb_weights.get("25Hz", 0.1) +
-    (eq_40 / 100.0) * curb_weights.get("40Hz", 0.2) +
-    (eq_60 / 100.0) * curb_weights.get("60Hz", 0.4) +
-    (eq_100 / 100.0) * curb_weights.get("100Hz", 0.3)
-) * road_sens_scalar
-
-dsp_sustained_nm = game_clip_sustained * base_scalar * effective_max_torque
-
-tax_friction = (moza_friction / 100.0) * (0.02 * effective_max_torque)
-tax_damper = (moza_damper / 100.0) * (10.0 / 25.0) * (effective_max_torque * 0.15) 
-tax_inertia = (moza_inertia / 100.0) * (50.0 / 80.0) * (effective_max_torque * 0.20)
-active_dyn_damper = (acc_dynamic_damping / 100.0) * 0.7 * (10.0 / 25.0) * (effective_max_torque * 0.15)
-total_mech_tax = tax_friction + tax_damper + tax_inertia + active_dyn_damper
-
-# Sweep across numeric values
-sweep_data = []
-for mult in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]:
-    test_dsp_transient_nm = (transient_game_signal * (base_weighted_eq * mult)) * base_scalar * effective_max_torque
-    test_requested_total_nm = dsp_sustained_nm + test_dsp_transient_nm
-    
-    test_clipped_motor_output = min(test_requested_total_nm, effective_max_torque)
-    test_final_output_nm = max(0.0, test_clipped_motor_output - total_mech_tax)
-    
-    sweep_data.append({
-        "EQ Scale Factor (%)": int(mult * 100),
-        "Requested Detail (Nm)": test_requested_total_nm,
-        "Delivered Force (Felt Nm)": test_final_output_nm
-    })
-    
-df_sweep = pd.DataFrame(sweep_data)
-
-# Melt the dataframe into long-form formatting for an unmovable Altair chart layout
-df_melted = df_sweep.melt(
-    id_vars=["EQ Scale Factor (%)"], 
-    value_vars=["Requested Detail (Nm)", "Delivered Force (Felt Nm)"],
-    var_name="Telemetry Metric", 
-    value_name="Force Output (Nm)"
-)
-
-# Render a completely static line graph using native Altair profiles (omitting selection bindings)
-static_chart = alt.Chart(df_melted).mark_line(point=True, strokeWidth=2.5).encode(
-    x=alt.X("EQ Scale Factor (%):Q", title="Horizontal Legend: EQ Scale Factor (%)", scale=alt.Scale(zero=False)),
-    y=alt.Y("Force Output (Nm):Q", title="Vertical Legend: Torque / Force (Nm)"),
-    color=alt.Color("Telemetry Metric:N", title="Vertical and Horizontal Legend", 
-                    scale=alt.Scale(domain=["Requested Detail (Nm)", "Delivered Force (Felt Nm)"], range=["#1f77b4", "#ff7f0e"]))
-).properties(
-    height=400
-)
-
-st.altair_chart(static_chart, use_container_width=True)
-
-# --- RESTORED SUB-SECTION: EQ CONTRIBUTIONS & COMPONENT BREAKDOWN ---
-st.subheader("📋 Curb Strike Telemetry: EQ Contributions & Phase Components")
-st.markdown("Below are the exact internal telemetry parameters calculated step-by-step for each stage of the curb strike scenario.")
-
-# Calculate dynamic values for the tables based on the user's current slider settings
-curb_phases = scenarios[5]["phases"]
-eq_table_rows = []
 breakdown_table_rows = []
-
-for p in curb_phases:
-    # Run the core simulation function to fetch all pipeline parameters live
+for p in curb_scenario["phases"]:
     res = simulate_ffb_pipeline(p["sustained"], p["transient"], p["car_speed"], p["w_vel"], p["w_accel"], curb_weights)
-    
-    # Extract structural scale factors to map the specific EQ band contributions
-    p_acc_mult = acc_gain / 100.0
-    p_sustained_game_signal = p["sustained"] * p_acc_mult
-    p_game_clip_sustained = min(p_sustained_game_signal, 1.0)
-    p_headroom = max(0.0, 1.0 - p_game_clip_sustained)
-    p_transient_game_signal = min(p["transient"] * p_acc_mult, p_headroom)
-    
-    p_eff_max_torque = max_torque_nm * (moza_torque_limit / 100.0)
-    p_base_scalar = moza_ffb / 100.0
-    p_road_sens_scalar = moza_road_sens / 10.0
-    
-    # Calculate separate Nm demands for each frequency band
-    nm_15 = p_transient_game_signal * (eq_15 / 100.0) * curb_weights["15Hz"] * p_road_sens_scalar * p_base_scalar * p_eff_max_torque
-    nm_25 = p_transient_game_signal * (eq_25 / 100.0) * curb_weights["25Hz"] * p_road_sens_scalar * p_base_scalar * p_eff_max_torque
-    nm_40 = p_transient_game_signal * (eq_40 / 100.0) * curb_weights["40Hz"] * p_road_sens_scalar * p_base_scalar * p_eff_max_torque
-    nm_60 = p_transient_game_signal * (eq_60 / 100.0) * curb_weights["60Hz"] * p_road_sens_scalar * p_base_scalar * p_eff_max_torque
-    nm_100 = p_transient_game_signal * (eq_100 / 100.0) * curb_weights["100Hz"] * p_road_sens_scalar * p_base_scalar * p_eff_max_torque
-    
-    eq_table_rows.append({
-        "Curb Phase": p["name"],
-        "15 Hz (Suspension)": f"{nm_15:.2f} Nm",
-        "25 Hz (Bumps)": f"{nm_25:.2f} Nm",
-        "40 Hz (Textures)": f"{nm_40:.2f} Nm",
-        "60 Hz (Road Noise)": f"{nm_60:.2f} Nm",
-        "100 Hz (Details)": f"{nm_100:.2f} Nm",
-        "Total EQ Boost Demand": f"{res['dsp_transient']:.2f} Nm"
-    })
     
     breakdown_table_rows.append({
         "Curb Phase": p["name"],
@@ -340,15 +238,5 @@ for p in curb_phases:
         "Signal Status": "🟥 CLIPPING" if res["hw_clip"] or res["acc_clip"] else "🟩 CLEAN"
     })
 
-# Render completely static HTML tables that cannot be moved, dragged, or sorted out of order
-st.markdown("### 🎛️ EQ Contribution Per Phase")
-st.table(pd.DataFrame(eq_table_rows).set_index("Curb Phase"))
-
-st.markdown("### 🔧 Telemetry Component Breakdown")
-st.table(pd.DataFrame(breakdown_table_rows).set_index("Curb Phase"))
-
-st.markdown("""
-💡 **Visualizing Numbness on the Chart:**
-* **The Blue Line (Requested Detail):** Represents what your audio-frequency EQ sliders are trying to demand as you push them higher.
-* **The Orange Line (Delivered Force):** Represents what actually reaches your hands. If this line goes **completely flat and horizontal**, your wheelbase has hit its physical output ceiling. Adjusting the EQ sliders up or down in this zone changes absolutely nothing on the track—the wheel has gone completely numb.
-""")
+df_breakdown = pd.DataFrame(breakdown_table_rows).set_index("Curb Phase")
+st.table(df_breakdown)
