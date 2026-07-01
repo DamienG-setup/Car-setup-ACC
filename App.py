@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import altair as alt
 
 st.set_page_config(
     page_title="Pro ACC Peak Load Predictor",
@@ -261,25 +262,78 @@ st.markdown("""
 When you hit a harsh curb, the physics engine generates a massive, violent transient force. If your current settings cause this demand to exceed your wheelbase's peak torque capacity, the motor hits an absolute electronic ceiling and triggers Hardware Clipping.
 
 Similarily, when the game demands a high self-aligning torque (primarily cornering grip) this clipping can occur. 
+
+Below is a live volume sweep of your current EQ configuration during a curb strike impact (scaled from 50% up to 250%):
 """)
 
-# --- SWAPPED: TELEMETRY COMPONENT BREAKDOWN TABLE ---
-curb_scenario = scenarios[5]
-curb_weights = curb_scenario["eq_weights"]
+# Extract current baseline pipeline parameters for a curb strike to sweep dynamically
+curb_weights = {"15Hz": 0.0, "25Hz": 0.1, "40Hz": 0.2, "60Hz": 0.4, "100Hz": 0.3}
 
-breakdown_table_rows = []
-for p in curb_scenario["phases"]:
-    res = simulate_ffb_pipeline(p["sustained"], p["transient"], p["car_speed"], p["w_vel"], p["w_accel"], curb_weights)
+acc_multiplier = acc_gain / 100.0
+sustained_game_signal = 0.30 * acc_multiplier
+game_clip_sustained = min(sustained_game_signal, 1.0)
+headroom = max(0.0, 1.0 - game_clip_sustained)
+transient_game_signal = min(1.50 * acc_multiplier, headroom)
+
+effective_max_torque = max_torque_nm * (moza_torque_limit / 100.0)
+base_scalar = moza_ffb / 100.0
+road_sens_scalar = moza_road_sens / 10.0
+
+base_weighted_eq = (
+    (eq_15 / 100.0) * curb_weights.get("15Hz", 0.0) +
+    (eq_25 / 100.0) * curb_weights.get("25Hz", 0.1) +
+    (eq_40 / 100.0) * curb_weights.get("40Hz", 0.2) +
+    (eq_60 / 100.0) * curb_weights.get("60Hz", 0.4) +
+    (eq_100 / 100.0) * curb_weights.get("100Hz", 0.3)
+) * road_sens_scalar
+
+dsp_sustained_nm = game_clip_sustained * base_scalar * effective_max_torque
+
+tax_friction = (moza_friction / 100.0) * (0.02 * effective_max_torque)
+tax_damper = (moza_damper / 100.0) * (10.0 / 25.0) * (effective_max_torque * 0.15) 
+tax_inertia = (moza_inertia / 100.0) * (50.0 / 80.0) * (effective_max_torque * 0.20)
+active_dyn_damper = (acc_dynamic_damping / 100.0) * 0.7 * (10.0 / 25.0) * (effective_max_torque * 0.15)
+total_mech_tax = tax_friction + tax_damper + tax_inertia + active_dyn_damper
+
+# Sweep across numeric values
+sweep_data = []
+for mult in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]:
+    test_dsp_transient_nm = (transient_game_signal * (base_weighted_eq * mult)) * base_scalar * effective_max_torque
+    test_requested_total_nm = dsp_sustained_nm + test_dsp_transient_nm
     
-    breakdown_table_rows.append({
-        "Curb Phase": p["name"],
-        "Sustained Base Force": f"{res['dsp_sustained']:.2f} Nm",
-        "Transient EQ Demand": f"{res['dsp_transient']:.2f} Nm",
-        "Total Requested Torque": f"{res['requested_nm']:.2f} Nm",
-        "Mechanical Tax Losses": f"-{res['total_tax']:.2f} Nm",
-        "Final Delivered Feedback": f"{res['final_nm']:.2f} Nm",
-        "Signal Status": "🟥 CLIPPING" if res["hw_clip"] or res["acc_clip"] else "🟩 CLEAN"
+    test_clipped_motor_output = min(test_requested_total_nm, effective_max_torque)
+    test_final_output_nm = max(0.0, test_clipped_motor_output - total_mech_tax)
+    
+    sweep_data.append({
+        "EQ Scale Factor (%)": int(mult * 100),
+        "Requested Detail (Nm)": test_requested_total_nm,
+        "Delivered Force (Felt Nm)": test_final_output_nm
     })
+    
+df_sweep = pd.DataFrame(sweep_data)
 
-df_breakdown = pd.DataFrame(breakdown_table_rows).set_index("Curb Phase")
-st.table(df_breakdown)
+# Melt the dataframe into long-form formatting for an unmovable Altair chart layout
+df_melted = df_sweep.melt(
+    id_vars=["EQ Scale Factor (%)"], 
+    value_vars=["Requested Detail (Nm)", "Delivered Force (Felt Nm)"],
+    var_name="Telemetry Metric", 
+    value_name="Force Output (Nm)"
+)
+
+# Render a completely static line graph using native Altair profiles (omitting selection bindings)
+static_chart = alt.Chart(df_melted).mark_line(point=True, strokeWidth=2.5).encode(
+    x=alt.X("EQ Scale Factor (%):Q", title="Horizontal Legend: EQ Scale Factor (%)", scale=alt.Scale(zero=False)),
+    y=alt.Y("Force Output (Nm):Q", title="Vertical Legend: Torque / Force (Nm)"),
+    color=alt.Color("Telemetry Metric:N", title="Vertical and Horizontal Legend", 
+                    scale=alt.Scale(domain=["Requested Detail (Nm)", "Delivered Force (Felt Nm)"], range=["#1f77b4", "#ff7f0e"]))
+).properties(
+    height=400
+)
+
+st.altair_chart(static_chart, use_container_width=True)
+
+st.markdown("""
+💡 **Visualizing Numbness on the Chart:**
+* **The Blue Line (Requested Detail):** Represents what your audio-frequency EQ sliders are trying to demand as you push them higher.
+* **The Orange Line (Delivered Force):** Represents what actually reaches your hands. If this line goes **completely flat and horizontal**, your wheelbase has hit its physical output ceiling. Adjusting the EQ sliders up or down in this zone changes absolutely nothing on the track—the wheel has gone completely numb.
+""")
