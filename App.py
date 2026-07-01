@@ -120,7 +120,10 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
     
     transient_game_signal = min(raw_transient * acc_multiplier, headroom)
     total_game_signal = game_clip_sustained + transient_game_signal
-    acc_is_clipping = (sustained_game_signal + raw_transient * acc_multiplier) >= 1.0
+    
+    # Calculate pre-clip raw signal to show users how far over 100% they are going
+    acc_raw_signal_total = (raw_sustained + raw_transient) * acc_multiplier
+    acc_is_clipping = acc_raw_signal_total >= 1.0
 
     effective_max_torque = max_torque_nm * (moza_torque_limit / 100.0)
 
@@ -140,9 +143,10 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
     requested_total_nm = dsp_sustained_nm + dsp_transient_nm
 
     tax_friction = (moza_friction / 100.0) * (0.02 * effective_max_torque)
-    tax_damper = (moza_damper / 100.0) * (wheel_vel / 25.0) * (effective_max_torque * 0.15) 
-    tax_inertia = (moza_inertia / 100.0) * (wheel_accel / 80.0) * (effective_max_torque * 0.20)
-    active_dyn_damper = (acc_dynamic_damping / 100.0) * car_speed * (wheel_vel / 25.0) * (effective_max_torque * 0.15)
+    # Applied abs() to ensure directional telemetry forces consume energy rather than creating it
+    tax_damper = (moza_damper / 100.0) * (abs(wheel_vel) / 25.0) * (effective_max_torque * 0.15) 
+    tax_inertia = (moza_inertia / 100.0) * (abs(wheel_accel) / 80.0) * (effective_max_torque * 0.20)
+    active_dyn_damper = (acc_dynamic_damping / 100.0) * abs(car_speed) * (abs(wheel_vel) / 25.0) * (effective_max_torque * 0.15)
     
     total_mech_tax = tax_friction + tax_damper + tax_inertia + active_dyn_damper
     
@@ -156,6 +160,7 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
     return {
         "acc_clip": acc_is_clipping,
         "hw_clip": hardware_is_clipping,
+        "acc_raw_signal": acc_raw_signal_total,
         "acc_signal": total_game_signal,
         "effective_torque": effective_max_torque,
         "dsp_sustained": dsp_sustained_nm,
@@ -289,7 +294,13 @@ for idx, scene in enumerate(scenarios):
         st.markdown("<br>", unsafe_allow_html=True)
         
         st.caption(f"**Worst-Case Pipeline Telemetry (Pre-Clip):**")
-        st.caption(f"↳ Game Output Signal: **{worst_res['acc_signal']*100:.0f}%**")
+        
+        # UI addition to show users exactly how far over 100% their signal is 
+        if worst_res['acc_raw_signal'] > 1.0:
+            st.caption(f"↳ Game Output Signal: **{worst_res['acc_signal']*100:.0f}%** (Raw: 🔴 **{worst_res['acc_raw_signal']*100:.0f}%**)")
+        else:
+            st.caption(f"↳ Game Output Signal: **{worst_res['acc_signal']*100:.0f}%**")
+            
         st.caption(f"↳ Req. Base Corner Force: **{worst_res['dsp_sustained']:.2f} Nm**")
         st.caption(f"↳ Req. EQ Transient Spikes: **{worst_res['dsp_transient']:.2f} Nm**")
         st.caption(f"↳ **Mech + Damper Tax: {worst_res['total_tax']:.2f} Nm**")
@@ -336,9 +347,10 @@ base_weighted_eq = (
 dsp_sustained_nm = game_clip_sustained * base_scalar * effective_max_torque
 
 tax_friction = (moza_friction / 100.0) * (0.02 * effective_max_torque)
-tax_damper = (moza_damper / 100.0) * (10.0 / 25.0) * (effective_max_torque * 0.15) 
-tax_inertia = (moza_inertia / 100.0) * (50.0 / 80.0) * (effective_max_torque * 0.20)
-active_dyn_damper = (acc_dynamic_damping / 100.0) * 0.7 * (10.0 / 25.0) * (effective_max_torque * 0.15)
+# Applied abs() to static variables to ensure alignment with main simulation logic
+tax_damper = (moza_damper / 100.0) * (abs(10.0) / 25.0) * (effective_max_torque * 0.15) 
+tax_inertia = (moza_inertia / 100.0) * (abs(50.0) / 80.0) * (effective_max_torque * 0.20)
+active_dyn_damper = (acc_dynamic_damping / 100.0) * abs(0.7) * (abs(10.0) / 25.0) * (effective_max_torque * 0.15)
 total_mech_tax = tax_friction + tax_damper + tax_inertia + active_dyn_damper
 
 # Sweep across numeric values
