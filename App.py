@@ -87,9 +87,11 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
     
     total_mech_tax = tax_friction + tax_damper + tax_inertia + active_dyn_damper
     
-    # STEP 5: Motor Hardware Output & Clipping (Interaction Model)
-    # Mechanical resistance dampens transient clarity, preventing the motor budget from flatlining to zero
-    dampened_transients = max(0.0, dsp_transient_nm - total_mech_tax)
+    # STEP 5: Motor Hardware Output & Clipping (Proportional Damping Model)
+    # Replaced hard subtraction wall with a dynamic attenuation ratio.
+    # High mechanical taxes reduce transient clarity percentage-wise, ensuring Hz boosts always pass through.
+    damping_ratio = max(0.05, 1.0 - (total_mech_tax / max(0.1, effective_max_torque)))
+    dampened_transients = dsp_transient_nm * damping_ratio
     adjusted_requested_nm = dsp_sustained_nm + dampened_transients
 
     final_output_nm = min(adjusted_requested_nm, effective_max_torque)
@@ -267,7 +269,7 @@ curb_data = simulate_ffb_pipeline(0.30, 1.50, 0.7, 10.0, 50.0, curb_weights)
 
 # Calculate the actual delivered transient after mechanical taxes have dampened it
 base_mech_tax = curb_data["tax_friction"] + curb_data["tax_damper"] + curb_data["tax_inertia"]
-actual_delivered_transient = max(0.0, curb_data["dsp_transient"] - (base_mech_tax + curb_data["dyn_damp_tax"]))
+actual_delivered_transient = curb_data["dsp_transient"] * max(0.05, 1.0 - ((base_mech_tax + curb_data["dyn_damp_tax"]) / max(0.1, curb_data["effective_torque"])))
 
 chart_data = pd.DataFrame({
     "Torque Allocation": [
