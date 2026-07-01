@@ -32,7 +32,7 @@ variables = {
     "eq_15": (100, 0, 500, 10),
     "eq_25": (100, 0, 500, 10),
     "eq_40": (120, 0, 500, 10),
-    "eq_60": (120, 0, 500, 10),
+    "eq_50": (120, 0, 500, 10),
     "eq_100": (100, 0, 500, 10),
     "moza_inertia": (100, 100, 500, 10),
     "moza_damper": (15, 0, 100, 1),
@@ -90,14 +90,14 @@ acc_dynamic_damping = render_param_row("ACC Dynamic Damping (%)", "acc_dynamic_d
 
 st.sidebar.header("3️⃣ WHEELBASE DSP / EQ")
 moza_ffb = render_param_row("Base FFB Intensity (%)", "moza_ffb", 0, 100, 1)
-moza_road_sens = render_param_row("Road Sensitivity (0-10)", "moza_road_sens", 0, 10, 1)
+moza_road_sens = render_param_row("Road Sensitivity (0-10)", "moza_road_sens", 0, 10, 1, help_text="Injects additional synthesized detail into high frequency bands (40Hz, 50Hz, 100Hz). Disabling this (0) leaves pure EQ telemetry.")
 
 st.sidebar.markdown("**Constructive EQ Boosts (Transient Scalers)**")
 eq_10 = render_param_row("10 Hz (Body Roll/Weight) (%)", "eq_10", 0, 500, 10)
 eq_15 = render_param_row("15 Hz (Suspension/Kerb) (%)", "eq_15", 0, 500, 10)
 eq_25 = render_param_row("25 Hz (ABS/Engine) (%)", "eq_25", 0, 500, 10)
 eq_40 = render_param_row("40 Hz (Textures/Slips) (%)", "eq_40", 0, 500, 10)
-eq_60 = render_param_row("60 Hz (Road Noise/Vibes) (%)", "eq_60", 0, 500, 10)
+eq_50 = render_param_row("50 Hz (Road Noise/Vibes) (%)", "eq_50", 0, 500, 10)
 eq_100 = render_param_row("100 Hz (High Freq Details) (%)", "eq_100", 0, 500, 10)
 
 st.sidebar.header("4️⃣ BASE MECHANICAL PROFILES")
@@ -109,42 +109,53 @@ moza_friction = render_param_row("Wheel Friction (%)", "moza_friction", 0, 100, 
 # --- CORE SIMULATION PIPELINE ENGINE ---
 def simulate_ffb_pure(raw_sustained, raw_transient, car_speed, wheel_vel, wheel_accel, eq_weights,
                       max_tq, tq_limit, a_gain, a_dyn_damp, m_ffb, m_road,
-                      e10, e15, e25, e40, e60, e100, m_inertia, m_damper, m_friction):
+                      e10, e15, e25, e40, e50, e100, m_inertia, m_damper, m_friction):
     
     acc_multiplier = a_gain / 100.0
     acc_raw_signal_total = (raw_sustained + raw_transient) * acc_multiplier
     
     # 1. ACC Software Clipper (Accurate 16-bit USB protocol limit)
+    # Total sum cannot exceed 1.0. High-frequency transients peak atop the sustained base.
     usb_sustained = min(raw_sustained * acc_multiplier, 1.0)
     headroom = max(0.0, 1.0 - usb_sustained)
     usb_transient = min(raw_transient * acc_multiplier, headroom)
     
     total_game_signal = usb_sustained + usb_transient
-    acc_is_clipping = acc_raw_signal_total >= 1.0
+    acc_is_clipping = acc_raw_signal_total > 1.0
 
     # 2. Hardware Capacities
     effective_max_torque = max_tq * (tq_limit / 100.0)
     base_scalar = m_ffb / 100.0
-    road_sens_scalar = m_road / 10.0
     
     # 3. DSP EQ Amplification
-    weighted_eq = (
+    base_eq_multiplier = (
         (e10 / 100.0) * eq_weights.get("10Hz", 0.0) +
         (e15 / 100.0) * eq_weights.get("15Hz", 0.0) +
         (e25 / 100.0) * eq_weights.get("25Hz", 0.0) +
         (e40 / 100.0) * eq_weights.get("40Hz", 0.0) +
-        (e60 / 100.0) * eq_weights.get("60Hz", 0.0) +
+        (e50 / 100.0) * eq_weights.get("50Hz", 0.0) +
         (e100 / 100.0) * eq_weights.get("100Hz", 0.0)
-    ) * road_sens_scalar
+    )
+    
+    # Road Sensitivity explicitly acts as an additional high-frequency injector (boosting texture spectrums)
+    road_hf_boost = (m_road / 10.0) * (
+        eq_weights.get("40Hz", 0.0) + 
+        eq_weights.get("50Hz", 0.0) + 
+        eq_weights.get("100Hz", 0.0)
+    )
+    
+    final_transient_multiplier = base_eq_multiplier + road_hf_boost
     
     base_motor_sustained = usb_sustained * base_scalar * effective_max_torque
-    base_motor_transient = usb_transient * weighted_eq * base_scalar * effective_max_torque
+    base_motor_transient = usb_transient * final_transient_multiplier * base_scalar * effective_max_torque
 
-    # 4. Mechanical Resistance Models
-    tax_friction = (m_friction / 100.0) * (0.02 * effective_max_torque)
+    # 4. Mechanical Resistance Models (Peak Phase Superposition logic)
+    # Assumes worst-case scenario: you are rotating against the active FFB vector, 
+    # forcing the motor to simultaneously generate peak FFB and synthetic dampening.
+    tax_friction = (m_friction / 100.0) * (0.05 * effective_max_torque)
     vel_factor = 1.0 - math.exp(-abs(wheel_vel) / 20.0)
     tax_damper = (m_damper / 100.0) * vel_factor * (effective_max_torque * 0.15) 
-    tax_inertia = (m_inertia / 100.0) * (abs(wheel_accel) / 100.0) * (effective_max_torque * 0.20)
+    tax_inertia = (m_inertia / 100.0) * (abs(wheel_accel) / 100.0) * (effective_max_torque * 0.05)
     tax_dyn_damper = (a_dyn_damp / 100.0) * abs(car_speed) * vel_factor * (effective_max_torque * 0.15)
     
     total_mech_tax = tax_friction + tax_damper + tax_inertia + tax_dyn_damper
@@ -155,8 +166,11 @@ def simulate_ffb_pure(raw_sustained, raw_transient, car_speed, wheel_vel, wheel_
     lost_to_hw_clip = max(0.0, gross_motor_demand - effective_max_torque)
     
     # 6. Signal Degradation Hierarchy
+    # Hardware clips peaks first. Transients are flattened out of the top of the wave.
     delivered_transient = max(0.0, base_motor_transient - lost_to_hw_clip)
     remaining_loss_for_sustained = max(0.0, lost_to_hw_clip - base_motor_transient)
+    
+    # If the mechanical damping request exceeds available limit entirely, even cornering force is suppressed.
     delivered_sustained = max(0.0, base_motor_sustained - remaining_loss_for_sustained)
     
     final_net_game_nm = delivered_sustained + delivered_transient
@@ -185,11 +199,11 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
         raw_sustained, raw_transient, car_speed, wheel_vel, wheel_accel, eq_weights,
         max_torque_nm, moza_torque_limit, acc_gain, acc_dynamic_damping,
         moza_ffb, moza_road_sens,
-        eq_10, eq_15, eq_25, eq_40, eq_60, eq_100,
+        eq_10, eq_15, eq_25, eq_40, eq_50, eq_100,
         moza_inertia, moza_damper, moza_friction
     )
 
-# --- SECTION 1: SCENARIO RENDERER (UPDATED TO TWO PHASES) ---
+# --- SECTION 1: SCENARIO RENDERER (UPDATED FREQUENCIES) ---
 st.header("🏁 Dynamic Telemetry Scenarios")
 st.markdown("Simulates the transition between peak grip and tire slip to analyze dynamic force drop-offs.")
 
@@ -197,7 +211,7 @@ scenarios = [
     {
         "name": "Low-Speed Hairpin",
         "has_bucket": True,
-        "eq_weights": {"10Hz": 0.4, "15Hz": 0.3, "25Hz": 0.1, "40Hz": 0.1, "60Hz": 0.1, "100Hz": 0.0}, 
+        "eq_weights": {"10Hz": 0.4, "15Hz": 0.3, "25Hz": 0.1, "40Hz": 0.1, "50Hz": 0.1, "100Hz": 0.0}, 
         "phases": [
             {"name": "Highest Peak of Grip", "sustained": 0.65, "transient": 0.10, "car_speed": 0.2, "w_vel": 5.0, "w_accel": 5.0},
             {"name": "Loss of Grip (Slide)", "sustained": 0.35, "transient": 0.15, "car_speed": 0.2, "w_vel": 12.0, "w_accel": 20.0} 
@@ -206,7 +220,7 @@ scenarios = [
     {
         "name": "Medium Speed Corner",
         "has_bucket": True,
-        "eq_weights": {"10Hz": 0.3, "15Hz": 0.3, "25Hz": 0.2, "40Hz": 0.1, "60Hz": 0.1, "100Hz": 0.0},
+        "eq_weights": {"10Hz": 0.3, "15Hz": 0.3, "25Hz": 0.2, "40Hz": 0.1, "50Hz": 0.1, "100Hz": 0.0},
         "phases": [
             {"name": "Highest Peak of Grip", "sustained": 0.85, "transient": 0.15, "car_speed": 0.5, "w_vel": 4.0, "w_accel": 6.0},
             {"name": "Loss of Grip (Understeer)", "sustained": 0.50, "transient": 0.20, "car_speed": 0.5, "w_vel": 9.0, "w_accel": 14.0} 
@@ -215,7 +229,7 @@ scenarios = [
     {
         "name": "High-Speed Corner",
         "has_bucket": True,
-        "eq_weights": {"10Hz": 0.2, "15Hz": 0.2, "25Hz": 0.3, "40Hz": 0.2, "60Hz": 0.1, "100Hz": 0.0},
+        "eq_weights": {"10Hz": 0.2, "15Hz": 0.2, "25Hz": 0.3, "40Hz": 0.2, "50Hz": 0.1, "100Hz": 0.0},
         "phases": [
             {"name": "Highest Peak of Grip", "sustained": 1.20, "transient": 0.20, "car_speed": 1.0, "w_vel": 2.0, "w_accel": 4.0},
             {"name": "Loss of Grip (Scrub)", "sustained": 1.10, "transient": 0.25, "car_speed": 1.0, "w_vel": 5.0, "w_accel": 10.0} 
@@ -224,7 +238,7 @@ scenarios = [
     {
         "name": "Heavy Braking",
         "has_bucket": False,
-        "eq_weights": {"10Hz": 0.2, "15Hz": 0.1, "25Hz": 0.4, "40Hz": 0.2, "60Hz": 0.1, "100Hz": 0.0}, 
+        "eq_weights": {"10Hz": 0.2, "15Hz": 0.1, "25Hz": 0.4, "40Hz": 0.2, "50Hz": 0.1, "100Hz": 0.0}, 
         "phases": [
             {"name": "Initial Hit (ABS Engages)", "sustained": 0.20, "transient": 0.80, "car_speed": 0.9, "w_vel": 1.0, "w_accel": 5.0}, 
             {"name": "Trail Braking (Turn-in)", "sustained": 0.65, "transient": 0.15, "car_speed": 0.6, "w_vel": 8.0, "w_accel": 10.0}
@@ -233,7 +247,7 @@ scenarios = [
     {
         "name": "Snap Oversteer",
         "has_bucket": False,
-        "eq_weights": {"10Hz": 0.3, "15Hz": 0.2, "25Hz": 0.1, "40Hz": 0.2, "60Hz": 0.2, "100Hz": 0.0}, 
+        "eq_weights": {"10Hz": 0.3, "15Hz": 0.2, "25Hz": 0.1, "40Hz": 0.2, "50Hz": 0.2, "100Hz": 0.0}, 
         "phases": [
             {"name": "Violent Catch (Tires Bite)", "sustained": 0.95, "transient": 0.85, "car_speed": 0.5, "w_vel": 25.0, "w_accel": 80.0}, 
             {"name": "Stabilization (Recovery)", "sustained": 0.50, "transient": 0.20, "car_speed": 0.4, "w_vel": 10.0, "w_accel": 15.0}
@@ -242,7 +256,7 @@ scenarios = [
     {
         "name": "Curb Strike",
         "has_bucket": False,
-        "eq_weights": {"10Hz": 0.0, "15Hz": 0.2, "25Hz": 0.1, "40Hz": 0.2, "60Hz": 0.3, "100Hz": 0.2}, 
+        "eq_weights": {"10Hz": 0.0, "15Hz": 0.2, "25Hz": 0.1, "40Hz": 0.2, "50Hz": 0.3, "100Hz": 0.2}, 
         "phases": [
             {"name": "Initial Strike (Impact)", "sustained": 0.35, "transient": 1.60, "car_speed": 0.7, "w_vel": 10.0, "w_accel": 50.0},
             {"name": "Riding the Curb", "sustained": 0.30, "transient": 0.90, "car_speed": 0.7, "w_vel": 15.0, "w_accel": 20.0}
@@ -261,7 +275,6 @@ for idx, scene in enumerate(scenarios):
         res["phase_name"] = p["name"]
         phase_results.append(res)
         
-    # FIX: Check compliance across all active phases to prevent false "Clean" signals
     any_acc_clip = any(r["acc_clip"] for r in phase_results)
     any_hw_clip = any(r["hw_clip"] for r in phase_results)
     worst_res = max(phase_results, key=lambda x: x["gross_demand_nm"])
@@ -339,7 +352,7 @@ Because the motor cannot produce more than 100% of its physical capacity, the fi
 Below is a live volume sweep of your current EQ configuration during a curb strike impact (scaled from 50% up to 250%):
 """)
 
-curb_weights = {"10Hz": 0.0, "15Hz": 0.2, "25Hz": 0.1, "40Hz": 0.2, "60Hz": 0.3, "100Hz": 0.2}
+curb_weights = {"10Hz": 0.0, "15Hz": 0.2, "25Hz": 0.1, "40Hz": 0.2, "50Hz": 0.3, "100Hz": 0.2}
 
 acc_multiplier = acc_gain / 100.0
 usb_sustained = min(0.35 * acc_multiplier, 1.0)
@@ -348,29 +361,35 @@ usb_transient = min(1.60 * acc_multiplier, headroom)
 
 effective_max_torque = max_torque_nm * (moza_torque_limit / 100.0)
 base_scalar = moza_ffb / 100.0
-road_sens_scalar = moza_road_sens / 10.0
 
-base_weighted_eq = (
+base_eq_multiplier_curb = (
     (eq_10 / 100.0) * curb_weights.get("10Hz", 0.0) +
     (eq_15 / 100.0) * curb_weights.get("15Hz", 0.0) +
     (eq_25 / 100.0) * curb_weights.get("25Hz", 0.0) +
     (eq_40 / 100.0) * curb_weights.get("40Hz", 0.0) +
-    (eq_60 / 100.0) * curb_weights.get("60Hz", 0.0) +
+    (eq_50 / 100.0) * curb_weights.get("50Hz", 0.0) +
     (eq_100 / 100.0) * curb_weights.get("100Hz", 0.0)
-) * road_sens_scalar
+)
+road_hf_boost_curb = (moza_road_sens / 10.0) * (
+    curb_weights.get("40Hz", 0.0) + 
+    curb_weights.get("50Hz", 0.0) + 
+    curb_weights.get("100Hz", 0.0)
+)
+
+final_transient_multiplier_curb = base_eq_multiplier_curb + road_hf_boost_curb
 
 base_motor_sustained = usb_sustained * base_scalar * effective_max_torque
 
-tax_friction = (moza_friction / 100.0) * (0.02 * effective_max_torque)
+tax_friction = (moza_friction / 100.0) * (0.05 * effective_max_torque)
 vel_factor_curb = 1.0 - math.exp(-abs(10.0) / 20.0)
 tax_damper = (moza_damper / 100.0) * vel_factor_curb * (effective_max_torque * 0.15) 
-tax_inertia = (moza_inertia / 100.0) * (abs(50.0) / 100.0) * (effective_max_torque * 0.20)
+tax_inertia = (moza_inertia / 100.0) * (abs(50.0) / 100.0) * (effective_max_torque * 0.05)
 tax_dyn_damper = (acc_dynamic_damping / 100.0) * abs(0.7) * vel_factor_curb * (effective_max_torque * 0.15)
 total_mech_tax = tax_friction + tax_damper + tax_inertia + tax_dyn_damper
 
 sweep_data = []
 for mult in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]:
-    test_base_transient = usb_transient * (base_weighted_eq * mult) * base_scalar * effective_max_torque
+    test_base_transient = usb_transient * (final_transient_multiplier_curb * mult) * base_scalar * effective_max_torque
     
     test_gross_demand = base_motor_sustained + test_base_transient + total_mech_tax
     test_lost = max(0.0, test_gross_demand - effective_max_torque)
@@ -396,9 +415,9 @@ df_melted = df_sweep.melt(
 )
 
 static_chart = alt.Chart(df_melted).mark_line(point=True, strokeWidth=2.5).encode(
-    x=alt.X("EQ Scale Factor (%):Q", title="Horizontal Legend: EQ Scale Factor (%)", scale=alt.Scale(zero=False)),
-    y=alt.Y("Force Output (Nm):Q", title="Vertical Legend: Torque / Force (Nm)"),
-    color=alt.Color("Telemetry Metric:N", title="Vertical and Horizontal Legend", 
+    x=alt.X("EQ Scale Factor (%):Q", title="EQ Scale Factor (%)", scale=alt.Scale(zero=False)),
+    y=alt.Y("Force Output (Nm):Q", title="Torque / Force (Nm)"),
+    color=alt.Color("Telemetry Metric:N", title="Metrics", 
                     scale=alt.Scale(domain=["Requested Gross Detail (Nm)", "Net Delivered Force (Felt Nm)"], range=["#1f77b4", "#ff7f0e"]))
 ).properties(
     height=400
@@ -431,7 +450,7 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
     res1 = simulate_ffb_pure(
         raw_sustained=1.0, raw_transient=1.0, car_speed=1.0, wheel_vel=10.0, wheel_accel=10.0, 
         eq_weights={"10Hz":1.0}, max_tq=10.0, tq_limit=0.0, a_gain=100.0, a_dyn_damp=100.0, 
-        m_ffb=100.0, m_road=10.0, e10=100.0, e15=100.0, e25=100.0, e40=100.0, e60=100.0, e100=100.0, 
+        m_ffb=100.0, m_road=10.0, e10=100.0, e15=100.0, e25=100.0, e40=100.0, e50=100.0, e100=100.0, 
         m_inertia=100.0, m_damper=100.0, m_friction=100.0
     )
     if check_match(res1["final_nm"], 0.0) and check_match(res1["effective_torque"], 0.0):
@@ -444,7 +463,7 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
     res2 = simulate_ffb_pure(
         raw_sustained=2.0, raw_transient=2.0, car_speed=1.0, wheel_vel=0.0, wheel_accel=0.0, 
         eq_weights={"10Hz":1.0}, max_tq=10.0, tq_limit=100.0, a_gain=100.0, a_dyn_damp=0.0, 
-        m_ffb=100.0, m_road=10.0, e10=100.0, e15=100.0, e25=100.0, e40=100.0, e60=100.0, e100=100.0, 
+        m_ffb=100.0, m_road=10.0, e10=100.0, e15=100.0, e25=100.0, e40=100.0, e50=100.0, e100=100.0, 
         m_inertia=100.0, m_damper=0.0, m_friction=0.0
     )
     if res2["acc_clip"] == True and check_match(res2["acc_signal"], 1.0):
@@ -457,7 +476,7 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
     res3 = simulate_ffb_pure(
         raw_sustained=0.5, raw_transient=0.5, car_speed=1.0, wheel_vel=0.0, wheel_accel=0.0, 
         eq_weights={"10Hz":1.0}, max_tq=5.0, tq_limit=100.0, a_gain=100.0, a_dyn_damp=0.0, 
-        m_ffb=100.0, m_road=10.0, e10=500.0, e15=100.0, e25=100.0, e40=100.0, e60=100.0, e100=100.0, 
+        m_ffb=100.0, m_road=10.0, e10=500.0, e15=100.0, e25=100.0, e40=100.0, e50=100.0, e100=100.0, 
         m_inertia=0.0, m_damper=0.0, m_friction=0.0
     )
     if res3["hw_clip"] == True and res3["final_nm"] <= 5.001 and res3["gross_demand_nm"] > 5.0:
@@ -470,7 +489,7 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
     res4 = simulate_ffb_pure(
         raw_sustained=0.0, raw_transient=0.0, car_speed=10.0, wheel_vel=99999.0, wheel_accel=0.0, 
         eq_weights={"10Hz":1.0}, max_tq=10.0, tq_limit=100.0, a_gain=100.0, a_dyn_damp=100.0, 
-        m_ffb=100.0, m_road=10.0, e10=100.0, e15=100.0, e25=100.0, e40=100.0, e60=100.0, e100=100.0, 
+        m_ffb=100.0, m_road=10.0, e10=100.0, e15=100.0, e25=100.0, e40=100.0, e50=100.0, e100=100.0, 
         m_inertia=0.0, m_damper=100.0, m_friction=0.0
     )
     if check_match(res4["tax_damper"], 1.5, tolerance=0.01):
@@ -483,7 +502,7 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
     res5 = simulate_ffb_pure(
         raw_sustained=0.5, raw_transient=0.1, car_speed=-10.0, wheel_vel=-50.0, wheel_accel=-200.0,
         eq_weights={"10Hz":1.0}, max_tq=15.0, tq_limit=100.0, a_gain=100.0, a_dyn_damp=100.0,
-        m_ffb=100.0, m_road=10.0, e10=100.0, e15=100.0, e25=100.0, e40=100.0, e60=100.0, e100=100.0,
+        m_ffb=100.0, m_road=10.0, e10=100.0, e15=100.0, e25=100.0, e40=100.0, e50=100.0, e100=100.0,
         m_inertia=100.0, m_damper=100.0, m_friction=100.0
     )
     if res5["total_tax"] > 0 and res5["tax_damper"] > 0 and res5["tax_inertia"] > 0:
@@ -496,7 +515,7 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
     res6 = simulate_ffb_pure(
         raw_sustained=1.2, raw_transient=0.5, car_speed=1.0, wheel_vel=1.0, wheel_accel=1.0,
         eq_weights={"10Hz":1.0}, max_tq=10.0, tq_limit=100.0, a_gain=100.0, a_dyn_damp=0.0,
-        m_ffb=100.0, m_road=10.0, e10=500.0, e15=500.0, e25=500.0, e40=500.0, e60=500.0, e100=500.0,
+        m_ffb=100.0, m_road=10.0, e10=500.0, e15=500.0, e25=500.0, e40=500.0, e50=500.0, e100=500.0,
         m_inertia=0.0, m_damper=0.0, m_friction=0.0
     )
     if check_match(res6["base_transient"], 0.0) and check_match(res6["final_nm"], res6["effective_torque"]):
@@ -509,7 +528,7 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
     res7 = simulate_ffb_pure(
         raw_sustained=0.8, raw_transient=0.8, car_speed=1.0, wheel_vel=1.0, wheel_accel=1.0,
         eq_weights={"10Hz":1.0}, max_tq=20.0, tq_limit=100.0, a_gain=50.0, a_dyn_damp=0.0,
-        m_ffb=100.0, m_road=10.0, e10=100.0, e15=100.0, e25=100.0, e40=100.0, e60=100.0, e100=100.0,
+        m_ffb=100.0, m_road=10.0, e10=100.0, e15=100.0, e25=100.0, e40=100.0, e50=100.0, e100=100.0,
         m_inertia=0.0, m_damper=0.0, m_friction=0.0
     )
     if check_match(res7["acc_signal"], 0.8) and check_match(res7["final_nm"], 16.0) and res7["acc_clip"] == False:
@@ -522,7 +541,7 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
     res8 = simulate_ffb_pure(
         raw_sustained=0.8, raw_transient=0.2, car_speed=1.0, wheel_vel=0.0, wheel_accel=0.0,
         eq_weights={"10Hz":1.0}, max_tq=10.0, tq_limit=100.0, a_gain=100.0, a_dyn_damp=0.0,
-        m_ffb=100.0, m_road=10.0, e10=200.0, e15=100.0, e25=100.0, e40=100.0, e60=100.0, e100=100.0,
+        m_ffb=100.0, m_road=10.0, e10=200.0, e15=100.0, e25=100.0, e40=100.0, e50=100.0, e100=100.0,
         m_inertia=0.0, m_damper=0.0, m_friction=0.0
     )
     if check_match(res8["delivered_transient"], 2.0) and check_match(res8["base_sustained"], 8.0):
