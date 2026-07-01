@@ -87,12 +87,13 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
     
     total_mech_tax = tax_friction + tax_damper + tax_inertia + active_dyn_damper
     
-    # Motor's remaining capacity after fighting its own mechanics
-    current_budget = max(0.0, effective_max_torque - total_mech_tax)
+    # STEP 5: Motor Hardware Output & Clipping (Interaction Model)
+    # Mechanical resistance dampens transient clarity, preventing the motor budget from flatlining to zero
+    dampened_transients = max(0.0, dsp_transient_nm - total_mech_tax)
+    adjusted_requested_nm = dsp_sustained_nm + dampened_transients
 
-    # STEP 5: Motor Hardware Output & Clipping
-    final_output_nm = min(requested_total_nm, current_budget)
-    hardware_is_clipping = requested_total_nm > current_budget
+    final_output_nm = min(adjusted_requested_nm, effective_max_torque)
+    hardware_is_clipping = adjusted_requested_nm > effective_max_torque
     
     return {
         "acc_clip": acc_is_clipping,
@@ -108,7 +109,7 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
         "dyn_damp_tax": active_dyn_damper,
         "requested_nm": requested_total_nm,
         "final_nm": final_output_nm,
-        "lost_to_hw_clip": max(0.0, requested_total_nm - current_budget)
+        "lost_to_hw_clip": max(0.0, adjusted_requested_nm - effective_max_torque)
     }
 
 # --- SECTION 1: SCENARIO RENDERER ---
@@ -192,8 +193,8 @@ for idx, scene in enumerate(scenarios):
         res["phase_name"] = p["name"]
         phase_results.append(res)
         
-    # Determine the "Worst Case" phase for the main metrics (based on highest requested torque)
-    worst_res = max(phase_results, key=lambda x: x["requested_nm"])
+    # Determine the "Worst Case" phase for the main metrics (Fixed: Based on highest delivered torque)
+    worst_res = max(phase_results, key=lambda x: x["final_nm"])
     
     with all_cols[idx]:
         st.markdown(f"### {scene['name']}")
