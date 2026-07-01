@@ -10,8 +10,8 @@ st.set_page_config(
 
 st.title("🏎️ Pro FFB Telemetry & Clipping Simulator")
 st.markdown("""
-This simulator uses a **Dynamic Signal Pipeline Model**. It accurately traces torque from **ACC's Physics Engine**, 
-through the **Game's Software Clipper**, into the **Wheelbase DSP (Equalizer)**, and finally against the **Physical Motor Hardware Budget** dynamically based on telemetry phases.
+This simulator uses an updated **Dynamic Signal Pipeline Model**. It traces torque from **ACC's Physics Engine**, 
+through the **Game's Software Clipper**, applies **Weighted DSP Frequency Bands**, and factors in the **Physical Motor Hardware Budget**.
 """)
 st.markdown("---")
 
@@ -27,12 +27,13 @@ acc_dynamic_damping = st.sidebar.slider("ACC Dynamic Damping (%)", 0, 100, 100, 
 st.sidebar.header("3️⃣ WHEELBASE DSP / EQ")
 moza_ffb = st.sidebar.slider("Base FFB Intensity (%)", 0, 100, 100)
 moza_road_sens = st.sidebar.slider("Road Sensitivity (0-10)", 0, 10, 8, help="Master multiplier for high-frequency bands.")
+
 st.sidebar.markdown("**Constructive EQ Boosts (Transient Scalers)**")
-eq_15_hz = st.sidebar.slider("15 Hz (Body/Suspension) (%)", 0, 500, 120, 10)
-eq_25_hz = st.sidebar.slider("25 Hz (Bumps/Engine) (%)", 0, 500, 120, 10)
-eq_40_hz = st.sidebar.slider("40 Hz (Textures/Slips) (%)", 0, 500, 130, 10)
-eq_60_hz = st.sidebar.slider("60 Hz (Road Noise/Vibrations) (%)", 0, 500, 130, 10)
-eq_100_hz = st.sidebar.slider("100 Hz (High Freq Details) (%)", 0, 500, 130, 10)
+eq_15 = st.sidebar.slider("15 Hz (Body/Suspension) (%)", 0, 500, 120, 10)
+eq_25 = st.sidebar.slider("25 Hz (Bumps/Engine) (%)", 0, 500, 120, 10)
+eq_40 = st.sidebar.slider("40 Hz (Textures/Slips) (%)", 0, 500, 130, 10)
+eq_60 = st.sidebar.slider("60 Hz (Road Noise/Vibrations) (%)", 0, 500, 130, 10)
+eq_100 = st.sidebar.slider("100 Hz (High Freq Details) (%)", 0, 500, 130, 10)
 
 st.sidebar.header("4️⃣ BASE MECHANICAL PROFILES")
 st.sidebar.markdown("*Set the base resistance percentages of your wheelbase software.*")
@@ -41,9 +42,10 @@ moza_damper = st.sidebar.slider("Wheel Damper (%)", 0, 100, 20)
 moza_friction = st.sidebar.slider("Wheel Friction (%)", 0, 100, 10)
 
 # --- CORE SIMULATION PIPELINE FUNCTION ---
-def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wheel_accel):
+def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wheel_accel, eq_weights):
     """
-    Simulates the true signal path from game to hardware using phase-specific kinematics.
+    Simulates the true signal path using scenario-specific EQ band weights.
+    eq_weights: dict containing mapping multipliers for [15hz, 25hz, 40hz, 60hz, 100hz]
     """
     # STEP 1: ACC Game Signal Processing (Soft Clipping)
     acc_multiplier = acc_gain / 100.0
@@ -64,17 +66,17 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
     base_scalar = moza_ffb / 100.0
     road_sens_scalar = moza_road_sens / 10.0
     
-    eq_15_mult = eq_15_hz / 100.0
-    eq_25_mult = eq_25_hz / 100.0
-    eq_40_mult = eq_40_hz / 100.0
-    eq_60_mult = eq_60_hz / 100.0
-    eq_100_mult = eq_100_hz / 100.0
-    
-    # Average out the distinct frequency bands for the transient simulation
-    avg_eq_boost = ((eq_15_mult + eq_25_mult + eq_40_mult + eq_60_mult + eq_100_mult) / 5.0) * road_sens_scalar
+    # Calculate weighted EQ impact for this specific phase
+    weighted_eq = (
+        (eq_15 / 100.0) * eq_weights.get("15Hz", 0.2) +
+        (eq_25 / 100.0) * eq_weights.get("25Hz", 0.2) +
+        (eq_40 / 100.0) * eq_weights.get("40Hz", 0.2) +
+        (eq_60 / 100.0) * eq_weights.get("60Hz", 0.2) +
+        (eq_100 / 100.0) * eq_weights.get("100Hz", 0.2)
+    ) * road_sens_scalar
     
     dsp_sustained_nm = game_clip_sustained * base_scalar * effective_max_torque
-    dsp_transient_nm = (transient_game_signal * avg_eq_boost) * base_scalar * effective_max_torque
+    dsp_transient_nm = (transient_game_signal * weighted_eq) * base_scalar * effective_max_torque
     requested_total_nm = dsp_sustained_nm + dsp_transient_nm
 
     # STEP 4: Mechanical Torque Tax (Overhead) - Calculated Dynamically per Scenario!
@@ -113,50 +115,61 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
 st.header("🏁 Dynamic Telemetry Scenarios")
 st.markdown("Each scenario simulates 3 chronological phases, calculating exactly how alignment torque and transients evolve dynamically through the corner.")
 
-# Re-calibrated Scenarios for Realistic Physics Drop-offs
 scenarios = [
     {
         "name": "Low-Speed Hairpin",
+        "has_bucket": True,
+        "eq_weights": {"15Hz": 0.6, "25Hz": 0.2, "40Hz": 0.1, "60Hz": 0.1, "100Hz": 0.0}, 
         "phases": [
             {"name": "Peak Grip", "sustained": 0.55, "transient": 0.05, "car_speed": 0.2, "w_vel": 5.0, "w_accel": 5.0},
             {"name": "Edge of Losing Grip", "sustained": 0.60, "transient": 0.15, "car_speed": 0.2, "w_vel": 8.0, "w_accel": 10.0},
-            {"name": "Losing Grip (Slide)", "sustained": 0.35, "transient": 0.25, "car_speed": 0.2, "w_vel": 12.0, "w_accel": 20.0} # Alignment torque plummets
+            {"name": "Losing Grip (Slide)", "sustained": 0.35, "transient": 0.25, "car_speed": 0.2, "w_vel": 12.0, "w_accel": 20.0} 
         ]
     },
     {
         "name": "Medium Speed Corner",
+        "has_bucket": True,
+        "eq_weights": {"15Hz": 0.4, "25Hz": 0.3, "40Hz": 0.2, "60Hz": 0.1, "100Hz": 0.0},
         "phases": [
             {"name": "Peak Grip", "sustained": 0.85, "transient": 0.10, "car_speed": 0.6, "w_vel": 3.0, "w_accel": 5.0},
             {"name": "Edge of Losing Grip", "sustained": 0.90, "transient": 0.20, "car_speed": 0.6, "w_vel": 6.0, "w_accel": 12.0},
-            {"name": "Losing Grip (Understeer)", "sustained": 0.45, "transient": 0.35, "car_speed": 0.6, "w_vel": 8.0, "w_accel": 15.0} # Wheel goes noticeably lighter
+            {"name": "Losing Grip (Understeer)", "sustained": 0.45, "transient": 0.35, "car_speed": 0.6, "w_vel": 8.0, "w_accel": 15.0} 
         ]
     },
     {
         "name": "High-Speed Corner",
+        "has_bucket": True,
+        "eq_weights": {"15Hz": 0.3, "25Hz": 0.4, "40Hz": 0.2, "60Hz": 0.1, "100Hz": 0.0},
         "phases": [
             {"name": "Peak Grip", "sustained": 1.15, "transient": 0.15, "car_speed": 1.0, "w_vel": 1.0, "w_accel": 2.0},
             {"name": "Edge of Losing Grip", "sustained": 1.25, "transient": 0.25, "car_speed": 1.0, "w_vel": 3.0, "w_accel": 8.0},
-            {"name": "Losing Grip (Scrub)", "sustained": 0.60, "transient": 0.45, "car_speed": 1.0, "w_vel": 6.0, "w_accel": 15.0} # Severe drop in resistance
+            {"name": "Losing Grip (Scrub)", "sustained": 0.60, "transient": 0.45, "car_speed": 1.0, "w_vel": 6.0, "w_accel": 15.0} 
         ]
     },
     {
         "name": "Heavy Braking",
+        "has_bucket": False,
+        "eq_weights": {"15Hz": 0.1, "25Hz": 0.2, "40Hz": 0.5, "60Hz": 0.1, "100Hz": 0.1}, 
         "phases": [
-            {"name": "Initial Hit (ABS Engages)", "sustained": 0.15, "transient": 0.70, "car_speed": 0.9, "w_vel": 1.0, "w_accel": 5.0}, # Straight wheel, massive chatter
-            {"name": "Trail Braking (Turn-in)", "sustained": 0.45, "transient": 0.30, "car_speed": 0.6, "w_vel": 8.0, "w_accel": 10.0}, # Transferring weight laterally
+            {"name": "Initial Hit (ABS Engages)", "sustained": 0.15, "transient": 0.70, "car_speed": 0.9, "w_vel": 1.0, "w_accel": 5.0}, 
+            {"name": "Trail Braking (Turn-in)", "sustained": 0.45, "transient": 0.30, "car_speed": 0.6, "w_vel": 8.0, "w_accel": 10.0}, 
             {"name": "Brake Release (Mid-Corner)", "sustained": 0.65, "transient": 0.10, "car_speed": 0.5, "w_vel": 3.0, "w_accel": 5.0}
         ]
     },
     {
         "name": "Snap Oversteer",
+        "has_bucket": False,
+        "eq_weights": {"15Hz": 0.2, "25Hz": 0.2, "40Hz": 0.4, "60Hz": 0.2, "100Hz": 0.0}, 
         "phases": [
-            {"name": "Initial Snap (Rear Lets Go)", "sustained": 0.10, "transient": 0.40, "car_speed": 0.6, "w_vel": 8.0, "w_accel": 30.0}, # Wheel goes dangerously light
-            {"name": "Violent Catch (Tires Bite)", "sustained": 0.90, "transient": 0.80, "car_speed": 0.5, "w_vel": 25.0, "w_accel": 80.0}, # Massive mechanical inertia tax
+            {"name": "Initial Snap (Rear Lets Go)", "sustained": 0.10, "transient": 0.40, "car_speed": 0.6, "w_vel": 8.0, "w_accel": 30.0}, 
+            {"name": "Violent Catch (Tires Bite)", "sustained": 0.90, "transient": 0.80, "car_speed": 0.5, "w_vel": 25.0, "w_accel": 80.0}, 
             {"name": "Stabilization (Recovery)", "sustained": 0.50, "transient": 0.20, "car_speed": 0.4, "w_vel": 10.0, "w_accel": 15.0}
         ]
     },
     {
         "name": "Curb Strike",
+        "has_bucket": False,
+        "eq_weights": {"15Hz": 0.0, "25Hz": 0.1, "40Hz": 0.2, "60Hz": 0.4, "100Hz": 0.3}, 
         "phases": [
             {"name": "Initial Strike (Impact)", "sustained": 0.30, "transient": 1.50, "car_speed": 0.7, "w_vel": 10.0, "w_accel": 50.0},
             {"name": "Riding the Curb", "sustained": 0.25, "transient": 0.90, "car_speed": 0.7, "w_vel": 15.0, "w_accel": 20.0},
@@ -175,7 +188,7 @@ for idx, scene in enumerate(scenarios):
     # Simulate all 3 phases
     phase_results = []
     for p in scene["phases"]:
-        res = simulate_ffb_pipeline(p["sustained"], p["transient"], p["car_speed"], p["w_vel"], p["w_accel"])
+        res = simulate_ffb_pipeline(p["sustained"], p["transient"], p["car_speed"], p["w_vel"], p["w_accel"], scene["eq_weights"])
         res["phase_name"] = p["name"]
         phase_results.append(res)
         
@@ -196,10 +209,29 @@ for idx, scene in enumerate(scenarios):
         # Final Force Metric
         st.metric(label="Overall Delivered Feedback", value=f"{worst_res['final_nm']:.2f} Nm")
         
+        # REACTION BUCKET METRIC DISPLAY
+        if scene["has_bucket"]:
+            edge_nm = phase_results[1]["final_nm"]
+            loss_nm = phase_results[2]["final_nm"]
+            bucket_delta = edge_nm - loss_nm
+            
+            st.metric(
+                label="🪣 Tactile Reaction Bucket", 
+                value=f"{bucket_delta:.2f} Nm Drop", 
+                delta=f"-{((bucket_delta)/max(0.1, edge_nm))*100:.0f}% Dynamic Falloff",
+                delta_color="inverse"
+            )
+            st.caption("*(The higher this drop-off, the easier it is to physically feel and catch the slide.)*")
+
         # DYNAMIC WARNING EXPLAINING MECHANICAL OVERHEAD
         if worst_res["hw_clip"]:
             st.caption(f"⚠️ *Note: The motor is operating at 100% capacity. The overall delivered feedback is what is left over after {worst_res['total_tax']:.2f} Nm is consumed by internal resistance (damping, friction, and inertia).*")
         
+        # Active EQ Bands Breakdown
+        st.markdown("**Dominant FFB Equalizer Bands:**")
+        active_bands = [f"{k} ({v*100:.0f}%)" for k, v in scene["eq_weights"].items() if v > 0]
+        st.caption(" | ".join(active_bands))
+
         # Phase Progression Breakdown
         st.markdown("**Phase Breakdown (Req. ➔ Delivered):**")
         for i, r in enumerate(phase_results):
@@ -229,8 +261,8 @@ If ACC clips at the software level, the blue "EQ Transients" bar will disappear,
 """)
 
 # Fetching the Initial Strike data specifically for visualization
-# sustained=0.30, transient=1.50, car_speed=0.7, w_vel=10.0, w_accel=50.0
-curb_data = simulate_ffb_pipeline(0.30, 1.50, 0.7, 10.0, 50.0)
+curb_weights = {"15Hz": 0.0, "25Hz": 0.1, "40Hz": 0.2, "60Hz": 0.4, "100Hz": 0.3}
+curb_data = simulate_ffb_pipeline(0.30, 1.50, 0.7, 10.0, 50.0, curb_weights)
 
 chart_data = pd.DataFrame({
     "Torque Allocation": [
