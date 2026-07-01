@@ -14,45 +14,107 @@ st.markdown("""
 This simulator uses an updated **Dynamic Signal Pipeline Model**. It traces torque from **ACC's Physics Engine**, 
 through the **Game's Software Clipper**, applies **Weighted DSP Frequency Bands**, and factors in the **Physical Motor Hardware Budget**.
 """)
+
+# Prominent alert to make the control panel location immediately obvious
+st.info("👈 **Tuning Controls are located in the Left Sidebar Panel.** Click the arrow icon ( `>` ) in the top-left corner if it is collapsed.")
 st.markdown("---")
 
+# --- TWO-WAY VALUE SYNCHRONIZATION INITIALIZATION ---
+# Format: { var_name: (default, min, max, step) }
+variables = {
+    "max_torque": (9.0, 2.0, 25.0, 0.1),
+    "moza_torque_limit": (100, 0, 100, 1),
+    "acc_gain": (70, 0, 100, 1),
+    "acc_dynamic_damping": (100, 0, 100, 1),
+    "moza_ffb": (100, 0, 100, 1),
+    "moza_road_sens": (8, 0, 10, 1),
+    "eq_15": (120, 0, 500, 10),
+    "eq_25": (120, 0, 500, 10),
+    "eq_40": (130, 0, 500, 10),
+    "eq_60": (130, 0, 500, 10),
+    "eq_100": (130, 0, 500, 10),
+    "moza_inertia": (100, 100, 500, 10),
+    "moza_damper": (20, 0, 100, 1),
+    "moza_friction": (10, 0, 100, 1)
+}
+
+# Pre-populate session state keys to avoid cross-talk drift
+for var, specs in variables.items():
+    if f"{var}_slider" not in st.session_state:
+        st.session_state[f"{var}_slider"] = specs[0]
+    if f"{var}_input" not in st.session_state:
+        st.session_state[f"{var}_input"] = specs[0]
+
+# Callbacks for instantaneous bidirectional sync
+def sync_slider_to_input(var_name):
+    st.session_state[f"{var_name}_input"] = st.session_state[f"{var_name}_slider"]
+
+def sync_input_to_slider(var_name):
+    st.session_state[f"{var_name}_slider"] = st.session_state[f"{var_name}_input"]
+
+def render_param_row(label, var_name, min_v, max_v, step_v, help_text=None):
+    c1, c2 = st.sidebar.columns([3.2, 1.5])
+    with c1:
+        val_from_slider = st.slider(
+            label, min_v, max_v, 
+            key=f"{var_name}_slider", 
+            step=step_v, 
+            on_change=sync_slider_to_input, 
+            args=(var_name,), 
+            help=help_text
+        )
+    with c2:
+        # Pushes input field down to align perfectly alongside the slider label
+        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+        val_from_input = st.number_input(
+            label, min_v, max_v, 
+            key=f"{var_name}_input", 
+            step=step_v, 
+            on_change=sync_input_to_slider, 
+            args=(var_name,), 
+            label_visibility="collapsed"
+        )
+    return val_from_slider
+
 # --- SIDEBAR: PIPELINE CONFIGURATION ---
+st.sidebar.markdown("""
+<div style="background-color: #ff4b4b22; padding: 12px; border-radius: 6px; border-left: 5px solid #ff4b4b; margin-bottom: 20px;">
+    <span style="font-size: 16px;"><strong>⚙️ TUNING CONTROL PANEL</strong></span><br>
+    <small>Adjust parameters instantly using either the sliders or input boxes side-by-side.</small>
+</div>
+""", unsafe_allow_html=True)
+
 st.sidebar.header("1️⃣ HARDWARE LIMITS")
-max_torque_nm = st.sidebar.slider("Wheel Base Peak Torque (Nm)", 2.0, 25.0, 9.0, 0.1, help="The absolute maximum physical rating of your wheelbase.")
-moza_torque_limit = st.sidebar.slider("Maximum Output Torque Limit (%)", 0, 100, 100, help="The software torque cap (e.g., Moza Pit House limiter).")
+max_torque_nm = render_param_row("Wheel Base Peak Torque (Nm)", "max_torque", 2.0, 25.0, 0.1, help_text="The absolute maximum physical rating of your wheelbase.")
+moza_torque_limit = render_param_row("Maximum Output Torque Limit (%)", "moza_torque_limit", 0, 100, 1, help_text="The software torque cap (e.g., Moza Pit House limiter).")
 
 st.sidebar.header("2️⃣ ACC IN-GAME OUTPUT")
-acc_gain = st.sidebar.slider("ACC Master Gain (%)", 0, 100, 70, help="Higher gain causes Kunos physics to clip before reaching the wheelbase.")
-acc_dynamic_damping = st.sidebar.slider("ACC Dynamic Damping (%)", 0, 100, 100, help="Gyroscopic damping at high speeds.")
+acc_gain = render_param_row("ACC Master Gain (%)", "acc_gain", 0, 100, 1, help_text="Higher gain causes Kunos physics to clip before reaching the wheelbase.")
+acc_dynamic_damping = render_param_row("ACC Dynamic Damping (%)", "acc_dynamic_damping", 0, 100, 1, help_text="Gyroscopic damping at high speeds.")
 
 st.sidebar.header("3️⃣ WHEELBASE DSP / EQ")
-moza_ffb = st.sidebar.slider("Base FFB Intensity (%)", 0, 100, 100)
-moza_road_sens = st.sidebar.slider("Road Sensitivity (0-10)", 0, 10, 8, help="Master multiplier for high-frequency bands.")
+moza_ffb = render_param_row("Base FFB Intensity (%)", "moza_ffb", 0, 100, 1)
+moza_road_sens = render_param_row("Road Sensitivity (0-10)", "moza_road_sens", 0, 10, 1, help_text="Master multiplier for high-frequency bands.")
 
 st.sidebar.markdown("**Constructive EQ Boosts (Transient Scalers)**")
-eq_15 = st.sidebar.slider("15 Hz (Body/Suspension) (%)", 0, 500, 120, 10)
-eq_25 = st.sidebar.slider("25 Hz (Bumps/Engine) (%)", 0, 500, 120, 10)
-eq_40 = st.sidebar.slider("40 Hz (Textures/Slips) (%)", 0, 500, 130, 10)
-eq_60 = st.sidebar.slider("60 Hz (Road Noise/Vibrations) (%)", 0, 500, 130, 10)
-eq_100 = st.sidebar.slider("100 Hz (High Freq Details) (%)", 0, 500, 130, 10)
+eq_15 = render_param_row("15 Hz (Body/Suspension) (%)", "eq_15", 0, 500, 10)
+eq_25 = render_param_row("25 Hz (Bumps/Engine) (%)", "eq_25", 0, 500, 10)
+eq_40 = render_param_row("40 Hz (Textures/Slips) (%)", "eq_40", 0, 500, 10)
+eq_60 = render_param_row("60 Hz (Road Noise/Vibrations) (%)", "eq_60", 0, 500, 10)
+eq_100 = render_param_row("100 Hz (High Freq Details) (%)", "eq_100", 0, 500, 10)
 
 st.sidebar.header("4️⃣ BASE MECHANICAL PROFILES")
 st.sidebar.markdown("*Set the base resistance percentages of your wheelbase software.*")
-moza_inertia = st.sidebar.slider("Natural Inertia (%)", 100, 500, 100, 10, help="Min is 100% (Base hardware weight).")
-moza_damper = st.sidebar.slider("Wheel Damper (%)", 0, 100, 20)
-moza_friction = st.sidebar.slider("Wheel Friction (%)", 0, 100, 10)
+moza_inertia = render_param_row("Natural Inertia (%)", "moza_inertia", 100, 500, 10, help_text="Min is 100% (Base hardware weight).")
+moza_damper = render_param_row("Wheel Damper (%)", "moza_damper", 0, 100, 1)
+moza_friction = render_param_row("Wheel Friction (%)", "moza_friction", 0, 100, 1)
+
 
 # --- CORE SIMULATION PIPELINE FUNCTION ---
 def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wheel_accel, eq_weights):
-    """
-    Simulates the true signal path using scenario-specific EQ band weights.
-    eq_weights: dict containing mapping multipliers for [15hz, 25hz, 40hz, 60hz, 100hz]
-    """
-    # STEP 1: ACC Game Signal Processing (Soft Clipping)
     acc_multiplier = acc_gain / 100.0
     sustained_game_signal = raw_sustained * acc_multiplier
     
-    # If sustained signal clips in-game, there is NO headroom for transients (flatlined)
     game_clip_sustained = min(sustained_game_signal, 1.0)
     headroom = max(0.0, 1.0 - game_clip_sustained)
     
@@ -60,14 +122,11 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
     total_game_signal = game_clip_sustained + transient_game_signal
     acc_is_clipping = (sustained_game_signal + raw_transient * acc_multiplier) >= 1.0
 
-    # STEP 2: Calculate Effective Motor Capability
     effective_max_torque = max_torque_nm * (moza_torque_limit / 100.0)
 
-    # STEP 3: Wheelbase DSP & Equalizer Application
     base_scalar = moza_ffb / 100.0
     road_sens_scalar = moza_road_sens / 10.0
     
-    # Calculate weighted EQ impact for this specific phase
     weighted_eq = (
         (eq_15 / 100.0) * eq_weights.get("15Hz", 0.2) +
         (eq_25 / 100.0) * eq_weights.get("25Hz", 0.2) +
@@ -80,7 +139,6 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
     dsp_transient_nm = (transient_game_signal * weighted_eq) * base_scalar * effective_max_torque
     requested_total_nm = dsp_sustained_nm + dsp_transient_nm
 
-    # STEP 4: Mechanical Torque Tax (Overhead) - Calculated Dynamically per Scenario!
     tax_friction = (moza_friction / 100.0) * (0.02 * effective_max_torque)
     tax_damper = (moza_damper / 100.0) * (wheel_vel / 25.0) * (effective_max_torque * 0.15) 
     tax_inertia = (moza_inertia / 100.0) * (wheel_accel / 80.0) * (effective_max_torque * 0.20)
@@ -88,9 +146,6 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
     
     total_mech_tax = tax_friction + tax_damper + tax_inertia + active_dyn_damper
     
-    # STEP 5: Motor Hardware Output & Clipping (Proportional Damping Model)
-    # Replaced hard subtraction wall with a dynamic attenuation ratio.
-    # High mechanical taxes reduce transient clarity percentage-wise, ensuring Hz boosts always pass through.
     damping_ratio = max(0.05, 1.0 - (total_mech_tax / max(0.1, effective_max_torque)))
     dampened_transients = dsp_transient_nm * damping_ratio
     adjusted_requested_nm = dsp_sustained_nm + dampened_transients
@@ -182,27 +237,22 @@ scenarios = [
     }
 ]
 
-# Create a 2x3 Grid for better layout scaling
 cols1 = st.columns(3)
 cols2 = st.columns(3)
 all_cols = cols1 + cols2
 
 for idx, scene in enumerate(scenarios):
-    
-    # Simulate all 3 phases
     phase_results = []
     for p in scene["phases"]:
         res = simulate_ffb_pipeline(p["sustained"], p["transient"], p["car_speed"], p["w_vel"], p["w_accel"], scene["eq_weights"])
         res["phase_name"] = p["name"]
         phase_results.append(res)
         
-    # Determine the "Worst Case" phase for the main metrics (Fixed: Based on highest delivered torque)
     worst_res = max(phase_results, key=lambda x: x["final_nm"])
     
     with all_cols[idx]:
         st.markdown(f"### {scene['name']}")
         
-        # Display Status for the worst phase
         if worst_res["acc_clip"]:
             st.error("🟥 ACC SOFTWARE CLIPPING\n\nSignal flatlined in game. EQ boosts severely muted.")
         elif worst_res["hw_clip"]:
@@ -210,10 +260,8 @@ for idx, scene in enumerate(scenarios):
         else:
             st.success("🟩 CLEAN SIGNAL\n\nFull dynamic range rendered.")
             
-        # Final Force Metric
         st.metric(label="Overall Delivered Feedback", value=f"{worst_res['final_nm']:.2f} Nm")
         
-        # REACTION BUCKET METRIC DISPLAY
         if scene["has_bucket"]:
             edge_nm = phase_results[1]["final_nm"]
             loss_nm = phase_results[2]["final_nm"]
@@ -227,41 +275,39 @@ for idx, scene in enumerate(scenarios):
             )
             st.caption("*(The higher this drop-off, the easier it is to physically feel and catch the slide.)*")
 
-        # DYNAMIC WARNING EXPLAINING MECHANICAL OVERHEAD
         if worst_res["hw_clip"]:
             st.caption(f"⚠️ *Note: The motor is operating at 100% capacity. The overall delivered feedback is what is left over after {worst_res['total_tax']:.2f} Nm is consumed by internal resistance (damping, friction, and inertia).*")
         
-        # Active EQ Bands Breakdown
         st.markdown("**Dominant FFB Equalizer Bands:**")
         active_bands = [f"{k} ({v*100:.0f}%)" for k, v in scene["eq_weights"].items() if v > 0]
         st.caption(" | ".join(active_bands))
 
-        # Phase Progression Breakdown
         st.markdown("**Phase Breakdown (Req. ➔ Delivered):**")
         for i, r in enumerate(phase_results):
             st.caption(f"{i+1}. {r['phase_name']}: **{r['requested_nm']:.2f} Nm** ➔ **{r['final_nm']:.2f} Nm**")
             
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # Original Detailed Breakdown (Mapped to Worst Phase)
         st.caption(f"**Worst-Case Pipeline Telemetry (Pre-Clip):**")
         st.caption(f"↳ Game Output Signal: **{worst_res['acc_signal']*100:.0f}%**")
         st.caption(f"↳ Req. Base Corner Force: **{worst_res['dsp_sustained']:.2f} Nm**")
         st.caption(f"↳ Req. EQ Transient Spikes: **{worst_res['dsp_transient']:.2f} Nm**")
         st.caption(f"↳ **Mech + Damper Tax: {worst_res['total_tax']:.2f} Nm**")
         
-        # Visual Progress Bar for Motor Capacity
         usage_pct = min(worst_res['final_nm'] / max_torque_nm, 1.0)
         st.progress(usage_pct)
         st.markdown("---")
+
 
 # --- SECTION 2: DEEP DIVE ANALYTICS ---
 st.header("📊 Curb Strike Impact: Hardware Clipping & Tactile Numbness")
 
 st.markdown("""
-When you hit a harsh curb, the physics engine generates a massive, violent transient force. If your current settings cause this demand to exceed your wheelbase's peak torque capacity, the motor hits an absolute electronic ceiling and triggers Hardware Clipping.
+When cornering, the physics engine calculates **Self-Aligning Torque**—the heavy, sustained baseline force that wants to snap the steering wheel back straight when front tires are loaded up. Because high cornering loads or overly high in-game master gains consume a huge chunk of your wheelbase's physical energy capacity, self-aligning torque serves as the main instigator for systemic hardware clipping. 
 
-Similarily, when the game demands a high self-aligning torque (primarily cornering grip) this clipping can occur. 
+If your motor is already working near its limit just holding the steering wheel steady through a fast corner, slamming into a harsh curb generates a violent extra spike of motion. This unexpected demand instantly slams into the wheelbase's absolute ceiling. 
+
+Because the motor cannot produce more than 100% of its physical capacity, the fine tactile vibrations and road textures provided by your **wheelbase EQ sliders get flattened down against this electronic ceiling**. No matter how high you crank your high-frequency sliders, the output cannot change—causing the wheel to feel completely numb right when you need detail the most.
 
 Below is a live volume sweep of your current EQ configuration during a curb strike impact (scaled from 50% up to 250%):
 """)
@@ -301,18 +347,18 @@ for mult in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]:
     test_dsp_transient_nm = (transient_game_signal * (base_weighted_eq * mult)) * base_scalar * effective_max_torque
     test_requested_total_nm = dsp_sustained_nm + test_dsp_transient_nm
     
-    test_clipped_motor_output = min(test_requested_total_nm, effective_max_torque)
-    test_final_output_nm = max(0.0, test_clipped_motor_output - total_mech_tax)
+    damping_ratio_loop = max(0.05, 1.0 - (total_mech_tax / max(0.1, effective_max_torque)))
+    test_adjusted_requested_nm = dsp_sustained_nm + (test_dsp_transient_nm * damping_ratio_loop)
+    test_final_output_nm = min(test_adjusted_requested_nm, effective_max_torque)
     
     sweep_data.append({
         "EQ Scale Factor (%)": int(mult * 100),
-        "Requested Detail (Nm)": test_requested_total_nm,
+        "Requested Detail (Nm)": test_adjusted_requested_nm,
         "Delivered Force (Felt Nm)": test_final_output_nm
     })
     
 df_sweep = pd.DataFrame(sweep_data)
 
-# Melt the dataframe into long-form formatting for an unmovable Altair chart layout
 df_melted = df_sweep.melt(
     id_vars=["EQ Scale Factor (%)"], 
     value_vars=["Requested Detail (Nm)", "Delivered Force (Felt Nm)"],
@@ -320,7 +366,6 @@ df_melted = df_sweep.melt(
     value_name="Force Output (Nm)"
 )
 
-# Render a completely static line graph using native Altair profiles (omitting selection bindings)
 static_chart = alt.Chart(df_melted).mark_line(point=True, strokeWidth=2.5).encode(
     x=alt.X("EQ Scale Factor (%):Q", title="Horizontal Legend: EQ Scale Factor (%)", scale=alt.Scale(zero=False)),
     y=alt.Y("Force Output (Nm):Q", title="Vertical Legend: Torque / Force (Nm)"),
