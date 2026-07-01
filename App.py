@@ -255,37 +255,31 @@ for idx, scene in enumerate(scenarios):
         st.markdown("---")
 
 # --- SECTION 2: DEEP DIVE ANALYTICS ---
-st.header("📊 Worst-Case Constructive Interference (Curb Strike Insight)")
+st.header("📊 Curb Strike Impact: Hardware Clipping & Tactile Numbness")
 
 st.markdown("""
-This chart visualizes what happens during the **Initial Strike** phase of a curb. 
-Notice how dynamic mechanical overhead (inertia/damper reacting to violent wheel movement) dampens the transient details. 
-If the total forces exceed your wheelbase's physical capacity, the remainder is pushed into **Lost to Hardware Clipping**.
+When you hit a harsh curb, the physics engine generates a massive, violent transient force. If your current settings cause this demand to exceed your wheelbase's peak torque capacity, the motor hits an absolute electronic ceiling and triggers Hardware Clipping.
+
+Similarily, when the game demands a high self-aligning torque (primarily cornering grip) this clipping can occur. 
 """)
 
-# Fetching the Initial Strike data specifically for visualization
-curb_weights = {"15Hz": 0.0, "25Hz": 0.1, "40Hz": 0.2, "60Hz": 0.4, "100Hz": 0.3}
-curb_data = simulate_ffb_pipeline(0.30, 1.50, 0.7, 10.0, 50.0, curb_weights)
+# --- SWAPPED: TELEMETRY COMPONENT BREAKDOWN TABLE ---
+curb_scenario = scenarios[5]
+curb_weights = curb_scenario["eq_weights"]
 
-# Calculate the actual delivered transient after mechanical taxes have dampened it
-base_mech_tax = curb_data["tax_friction"] + curb_data["tax_damper"] + curb_data["tax_inertia"]
-actual_delivered_transient = curb_data["dsp_transient"] * max(0.05, 1.0 - ((base_mech_tax + curb_data["dyn_damp_tax"]) / max(0.1, curb_data["effective_torque"])))
+breakdown_table_rows = []
+for p in curb_scenario["phases"]:
+    res = simulate_ffb_pipeline(p["sustained"], p["transient"], p["car_speed"], p["w_vel"], p["w_accel"], curb_weights)
+    
+    breakdown_table_rows.append({
+        "Curb Phase": p["name"],
+        "Sustained Base Force": f"{res['dsp_sustained']:.2f} Nm",
+        "Transient EQ Demand": f"{res['dsp_transient']:.2f} Nm",
+        "Total Requested Torque": f"{res['requested_nm']:.2f} Nm",
+        "Mechanical Tax Losses": f"-{res['total_tax']:.2f} Nm",
+        "Final Delivered Feedback": f"{res['final_nm']:.2f} Nm",
+        "Signal Status": "🟥 CLIPPING" if res["hw_clip"] or res["acc_clip"] else "🟩 CLEAN"
+    })
 
-chart_data = pd.DataFrame({
-    "Torque Allocation": [
-        "Base Mech Tax (Friction/Damper/Inertia)", 
-        "ACC Dynamic Damper Tax",
-        "Sustained Physics Force", 
-        "Delivered EQ Transients (Post-Damp)", 
-        "Lost to Hardware Clipping"
-    ],
-    "Nm": [
-        base_mech_tax,
-        curb_data["dyn_damp_tax"],
-        curb_data["dsp_sustained"],
-        actual_delivered_transient, # Captures true headroom transients, even during partial clipping
-        curb_data["lost_to_hw_clip"]
-    ]
-})
-
-st.bar_chart(chart_data.set_index("Torque Allocation"))
+df_breakdown = pd.DataFrame(breakdown_table_rows).set_index("Curb Phase")
+st.table(df_breakdown)
