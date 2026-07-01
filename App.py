@@ -51,21 +51,28 @@ def sync_input_to_slider(var_name):
     st.session_state[f"{var_name}_slider"] = st.session_state[f"{var_name}_input"]
 
 def render_param_row(label, var_name, min_v, max_v, step_v, help_text=None):
+    # Dynamically determine formatting to prevent Streamlit step-validation glitches
+    is_float = isinstance(step_v, float)
+    fmt = "%.1f" if is_float else "%d"
+    
     c1, c2 = st.sidebar.columns([3.2, 1.5])
+    
     with c1:
-        val_from_slider = st.slider(
+        st.slider(
             label, min_v, max_v, 
-            key=f"{var_name}_slider", step=step_v, 
+            key=f"{var_name}_slider", step=step_v, format=fmt,
             on_change=sync_slider_to_input, args=(var_name,), help=help_text
         )
     with c2:
         st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-        val_from_input = st.number_input(
+        st.number_input(
             label, min_v, max_v, 
-            key=f"{var_name}_input", step=step_v, 
+            key=f"{var_name}_input", step=step_v, format=fmt,
             on_change=sync_input_to_slider, args=(var_name,), label_visibility="collapsed"
         )
-    return val_from_slider
+        
+    # Safest to return the absolute session state value to guarantee math uses the synced value
+    return st.session_state[f"{var_name}_slider"]
 
 # --- SIDEBAR: PIPELINE CONFIGURATION ---
 st.sidebar.markdown("""
