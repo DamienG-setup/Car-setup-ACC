@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import altair as alt
 
 st.set_page_config(
     page_title="Pro ACC Peak Load Predictor",
@@ -250,7 +250,7 @@ tax_inertia = (moza_inertia / 100.0) * (50.0 / 80.0) * (effective_max_torque * 0
 active_dyn_damper = (acc_dynamic_damping / 100.0) * 0.7 * (10.0 / 25.0) * (effective_max_torque * 0.15)
 total_mech_tax = tax_friction + tax_damper + tax_inertia + active_dyn_damper
 
-# Sweep across numeric values to guarantee a perfectly ordered, non-moving X-axis 
+# Sweep across numeric values
 sweep_data = []
 for mult in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]:
     test_dsp_transient_nm = (transient_game_signal * (base_weighted_eq * mult)) * base_scalar * effective_max_torque
@@ -265,28 +265,27 @@ for mult in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]:
         "Delivered Force (Felt Nm)": test_final_output_nm
     })
     
-df_sweep = pd.DataFrame(sweep_data).set_index("EQ Scale Factor (%)")
+df_sweep = pd.DataFrame(sweep_data)
 
-# --- FIXED STATIC GRAPH RENDERING ---
-fig, ax = plt.subplots(figsize=(10, 4.5))
+# Melt the dataframe into long-form formatting for an unmovable Altair chart layout
+df_melted = df_sweep.melt(
+    id_vars=["EQ Scale Factor (%)"], 
+    value_vars=["Requested Detail (Nm)", "Delivered Force (Felt Nm)"],
+    var_name="Telemetry Metric", 
+    value_name="Force Output (Nm)"
+)
 
-# Plot the lines with clear visual distinction
-ax.plot(df_sweep.index, df_sweep["Requested Detail (Nm)"], label="Requested Detail (Nm)", color="#1f77b4", marker='o', linewidth=2)
-ax.plot(df_sweep.index, df_sweep["Delivered Force (Felt Nm)"], label="Delivered Force (Felt Nm)", color="#ff7f0e", marker='s', linewidth=2)
+# Render a completely static line graph using native Altair profiles (omitting selection bindings)
+static_chart = alt.Chart(df_melted).mark_line(point=True, strokeWidth=2.5).encode(
+    x=alt.X("EQ Scale Factor (%):Q", title="Horizontal Legend: EQ Scale Factor (%)", scale=alt.Scale(zero=False)),
+    y=alt.Y("Force Output (Nm):Q", title="Vertical Legend: Torque / Force (Nm)"),
+    color=alt.Color("Telemetry Metric:N", title="Vertical and Horizontal Legend", 
+                    scale=alt.Scale(domain=["Requested Detail (Nm)", "Delivered Force (Felt Nm)"], range=["#1f77b4", "#ff7f0e"]))
+).properties(
+    height=400
+)
 
-# Explicit horizontal and vertical axis titles / legends
-ax.set_xlabel("Horizontal Legend: EQ Scale Factor (%)", fontsize=10, fontweight='bold', labelpad=10)
-ax.set_ylabel("Vertical Legend: Torque / Force (Nm)", fontsize=10, fontweight='bold', labelpad=10)
-
-# Anchor structural guidelines both vertically and horizontally
-ax.grid(True, which='both', linestyle='--', alpha=0.5)
-
-# Render a solid, non-moving series label legend
-ax.legend(loc="upper left", frameon=True, facecolor='#ffffff', edgecolor='#e0e0e0')
-
-# Force a clean layout layout and display as an unmovable image matrix
-plt.tight_layout()
-st.pyplot(fig)
+st.altair_chart(static_chart, use_container_width=True)
 
 st.markdown("""
 💡 **Visualizing Numbness on the Chart:**
