@@ -214,7 +214,9 @@ for idx, scene in enumerate(scenarios):
 st.header("📊 Curb Strike Impact: Hardware Clipping & Tactile Numbness")
 
 st.markdown("""
-When you hit a harsh curb, the physics engine generates a massive, violent transient force. If your current settings cause this force to exceed your wheelbase's peak torque capacity, the motor hits an absolute electronic ceiling and triggers **Hardware Clipping**.
+When you hit a harsh curb, the physics engine generates a massive, violent transient force. If your current settings cause this demand to exceed your wheelbase's peak torque capacity, the motor hits an absolute electronic ceiling and triggers Hardware Clipping.
+
+Similarily, when the game demands a high self-alighning torque (primarily cornering grip) this clipping can occur.
 
 Because the wheelbase is already working at 100% maximum effort just to output the raw slam of the curb, it has zero power left to give. Any fine texture or detail boosts coming from your **wheelbase EQ sliders get chopped off at the ceiling**. No matter how high you crank up your EQ settings, the physical torque output cannot change—resulting in absolute **tactile numbness**.
 
@@ -286,6 +288,64 @@ static_chart = alt.Chart(df_melted).mark_line(point=True, strokeWidth=2.5).encod
 )
 
 st.altair_chart(static_chart, use_container_width=True)
+
+# --- RESTORED SUB-SECTION: EQ CONTRIBUTIONS & COMPONENT BREAKDOWN ---
+st.subheader("📋 Curb Strike Telemetry: EQ Contributions & Phase Components")
+st.markdown("Below are the exact internal telemetry parameters calculated step-by-step for each stage of the curb strike scenario.")
+
+# Calculate dynamic values for the tables based on the user's current slider settings
+curb_phases = scenarios[5]["phases"]
+eq_table_rows = []
+breakdown_table_rows = []
+
+for p in curb_phases:
+    # Run the core simulation function to fetch all pipeline parameters live
+    res = simulate_ffb_pipeline(p["sustained"], p["transient"], p["car_speed"], p["w_vel"], p["w_accel"], curb_weights)
+    
+    # Extract structural scale factors to map the specific EQ band contributions
+    p_acc_mult = acc_gain / 100.0
+    p_sustained_game_signal = p["sustained"] * p_acc_mult
+    p_game_clip_sustained = min(p_sustained_game_signal, 1.0)
+    p_headroom = max(0.0, 1.0 - p_game_clip_sustained)
+    p_transient_game_signal = min(p["transient"] * p_acc_mult, p_headroom)
+    
+    p_eff_max_torque = max_torque_nm * (moza_torque_limit / 100.0)
+    p_base_scalar = moza_ffb / 100.0
+    p_road_sens_scalar = moza_road_sens / 10.0
+    
+    # Calculate separate Nm demands for each frequency band
+    nm_15 = p_transient_game_signal * (eq_15 / 100.0) * curb_weights["15Hz"] * p_road_sens_scalar * p_base_scalar * p_eff_max_torque
+    nm_25 = p_transient_game_signal * (eq_25 / 100.0) * curb_weights["25Hz"] * p_road_sens_scalar * p_base_scalar * p_eff_max_torque
+    nm_40 = p_transient_game_signal * (eq_40 / 100.0) * curb_weights["40Hz"] * p_road_sens_scalar * p_base_scalar * p_eff_max_torque
+    nm_60 = p_transient_game_signal * (eq_60 / 100.0) * curb_weights["60Hz"] * p_road_sens_scalar * p_base_scalar * p_eff_max_torque
+    nm_100 = p_transient_game_signal * (eq_100 / 100.0) * curb_weights["100Hz"] * p_road_sens_scalar * p_base_scalar * p_eff_max_torque
+    
+    eq_table_rows.append({
+        "Curb Phase": p["name"],
+        "15 Hz (Suspension)": f"{nm_15:.2f} Nm",
+        "25 Hz (Bumps)": f"{nm_25:.2f} Nm",
+        "40 Hz (Textures)": f"{nm_40:.2f} Nm",
+        "60 Hz (Road Noise)": f"{nm_60:.2f} Nm",
+        "100 Hz (Details)": f"{nm_100:.2f} Nm",
+        "Total EQ Boost Demand": f"{res['dsp_transient']:.2f} Nm"
+    })
+    
+    breakdown_table_rows.append({
+        "Curb Phase": p["name"],
+        "Sustained Base Force": f"{res['dsp_sustained']:.2f} Nm",
+        "Transient EQ Demand": f"{res['dsp_transient']:.2f} Nm",
+        "Total Requested Torque": f"{res['requested_nm']:.2f} Nm",
+        "Mechanical Tax Losses": f"-{res['total_tax']:.2f} Nm",
+        "Final Delivered Feedback": f"{res['final_nm']:.2f} Nm",
+        "Signal Status": "🟥 CLIPPING" if res["hw_clip"] or res["acc_clip"] else "🟩 CLEAN"
+    })
+
+# Render completely static HTML tables that cannot be moved, dragged, or sorted out of order
+st.markdown("### 🎛️ EQ Contribution Per Phase")
+st.table(pd.DataFrame(eq_table_rows).set_index("Curb Phase"))
+
+st.markdown("### 🔧 Telemetry Component Breakdown")
+st.table(pd.DataFrame(breakdown_table_rows).set_index("Curb Phase"))
 
 st.markdown("""
 💡 **Visualizing Numbness on the Chart:**
