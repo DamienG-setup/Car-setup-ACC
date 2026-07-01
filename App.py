@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import matplotlib.pyplot as plt
 
 st.set_page_config(
     page_title="Pro ACC Peak Load Predictor",
@@ -265,7 +266,27 @@ for mult in [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]:
     })
     
 df_sweep = pd.DataFrame(sweep_data).set_index("EQ Scale Factor (%)")
-st.line_chart(df_sweep)
+
+# --- FIXED STATIC GRAPH RENDERING ---
+fig, ax = plt.subplots(figsize=(10, 4.5))
+
+# Plot the lines with clear visual distinction
+ax.plot(df_sweep.index, df_sweep["Requested Detail (Nm)"], label="Requested Detail (Nm)", color="#1f77b4", marker='o', linewidth=2)
+ax.plot(df_sweep.index, df_sweep["Delivered Force (Felt Nm)"], label="Delivered Force (Felt Nm)", color="#ff7f0e", marker='s', linewidth=2)
+
+# Explicit horizontal and vertical axis titles / legends
+ax.set_xlabel("Horizontal Legend: EQ Scale Factor (%)", fontsize=10, fontweight='bold', labelpad=10)
+ax.set_ylabel("Vertical Legend: Torque / Force (Nm)", fontsize=10, fontweight='bold', labelpad=10)
+
+# Anchor structural guidelines both vertically and horizontally
+ax.grid(True, which='both', linestyle='--', alpha=0.5)
+
+# Render a solid, non-moving series label legend
+ax.legend(loc="upper left", frameon=True, facecolor='#ffffff', edgecolor='#e0e0e0')
+
+# Force a clean layout layout and display as an unmovable image matrix
+plt.tight_layout()
+st.pyplot(fig)
 
 st.markdown("""
 💡 **Visualizing Numbness on the Chart:**
