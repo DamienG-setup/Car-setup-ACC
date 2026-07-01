@@ -257,27 +257,31 @@ st.header("📊 Worst-Case Constructive Interference (Curb Strike Insight)")
 
 st.markdown("""
 This chart visualizes what happens during the **Initial Strike** phase of a curb. 
-Notice how dynamic mechanical overhead (inertia/damper reacting to violent wheel movement) and ACC's software limits interact with the equalizer. 
-If ACC clips at the software level, the blue "EQ Transients" bar will disappear, simulating a muddy, flatlined FFB feeling.
+Notice how dynamic mechanical overhead (inertia/damper reacting to violent wheel movement) dampens the transient details. 
+If the total forces exceed your wheelbase's physical capacity, the remainder is pushed into **Lost to Hardware Clipping**.
 """)
 
 # Fetching the Initial Strike data specifically for visualization
 curb_weights = {"15Hz": 0.0, "25Hz": 0.1, "40Hz": 0.2, "60Hz": 0.4, "100Hz": 0.3}
 curb_data = simulate_ffb_pipeline(0.30, 1.50, 0.7, 10.0, 50.0, curb_weights)
 
+# Calculate the actual delivered transient after mechanical taxes have dampened it
+base_mech_tax = curb_data["tax_friction"] + curb_data["tax_damper"] + curb_data["tax_inertia"]
+actual_delivered_transient = max(0.0, curb_data["dsp_transient"] - (base_mech_tax + curb_data["dyn_damp_tax"]))
+
 chart_data = pd.DataFrame({
     "Torque Allocation": [
         "Base Mech Tax (Friction/Damper/Inertia)", 
         "ACC Dynamic Damper Tax",
         "Sustained Physics Force", 
-        "EQ Transient Spikes", 
+        "Delivered EQ Transients (Post-Damp)", 
         "Lost to Hardware Clipping"
     ],
     "Nm": [
-        curb_data["tax_friction"] + curb_data["tax_damper"] + curb_data["tax_inertia"],
+        base_mech_tax,
         curb_data["dyn_damp_tax"],
         curb_data["dsp_sustained"],
-        curb_data["dsp_transient"] if not curb_data["acc_clip"] else 0.0,
+        actual_delivered_transient, # Captures true headroom transients, even during partial clipping
         curb_data["lost_to_hw_clip"]
     ]
 })
