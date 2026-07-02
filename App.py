@@ -20,12 +20,11 @@ st.info("👈 **Tuning Controls are located in the Left Sidebar Panel.** Click t
 st.markdown("---")
 
 # --- TWO-WAY VALUE SYNCHRONIZATION INITIALIZATION ---
-# Physics Update: acc_gain and acc_dynamic_damping max range increased to 200%
 variables = {
     "max_torque": (3.9, 2.0, 25.0, 0.1),
     "moza_torque_limit": (100, 0, 100, 1),
-    "acc_gain": (100, 0, 200, 1), # Maxed to 200 to match ACC Physics Engine
-    "acc_dynamic_damping": (100, 0, 200, 1), # Maxed to 200 to match ACC Physics Engine
+    "acc_gain": (100, 0, 200, 1), 
+    "acc_dynamic_damping": (100, 0, 200, 1), 
     "moza_ffb": (100, 0, 100, 1),
     "moza_road_sens": (8, 0, 10, 1),
     "eq_10": (100, 0, 500, 10),
@@ -90,7 +89,7 @@ acc_dynamic_damping = render_param_row("ACC Dynamic Damping (%)", "acc_dynamic_d
 
 st.sidebar.header("3️⃣ WHEELBASE DSP / EQ")
 moza_ffb = render_param_row("Base FFB Intensity (%)", "moza_ffb", 0, 100, 1)
-moza_road_sens = render_param_row("Road Sensitivity (0-10)", "moza_road_sens", 0, 10, 1, help_text="Injects additional synthesized detail into high frequency bands (40Hz, 50Hz, 100Hz). Disabling this (0) leaves pure EQ telemetry.")
+moza_road_sens = render_param_row("Road Sensitivity (0-10)", "moza_road_sens", 0, 10, 1, help_text="Injects additional synthesized detail into high frequency bands.")
 
 st.sidebar.markdown("**Constructive EQ Boosts (Transient Scalers)**")
 eq_10 = render_param_row("10 Hz (Body Roll/Weight) (%)", "eq_10", 0, 500, 10)
@@ -105,18 +104,15 @@ moza_inertia = render_param_row("Natural Inertia (%)", "moza_inertia", 100, 500,
 moza_damper = render_param_row("Wheel Damper (%)", "moza_damper", 0, 100, 1)
 moza_friction = render_param_row("Wheel Friction (%)", "moza_friction", 0, 100, 1)
 
-
 # --- CORE SIMULATION PIPELINE ENGINE ---
 def simulate_ffb_pure(raw_sustained, raw_transient, car_speed, wheel_vel, wheel_accel, eq_weights,
                       max_tq, tq_limit, a_gain, a_dyn_damp, m_ffb, m_road,
                       e10, e15, e25, e40, e50, e100, m_inertia, m_damper, m_friction):
     
-    # Corrected Physics: acc_multiplier now handles up to 2.0 (200%)
     acc_multiplier = a_gain / 100.0
     acc_raw_signal_total = (raw_sustained + raw_transient) * acc_multiplier
     
-    # 1. ACC Software Clipper (Accurate 16-bit USB protocol limit)
-    # Total sum cannot exceed 1.0. High-frequency transients peak atop the sustained base.
+    # 1. ACC Software Clipper
     usb_sustained = min(raw_sustained * acc_multiplier, 1.0)
     headroom = max(0.0, 1.0 - usb_sustained)
     usb_transient = min(raw_transient * acc_multiplier, headroom)
@@ -138,7 +134,6 @@ def simulate_ffb_pure(raw_sustained, raw_transient, car_speed, wheel_vel, wheel_
         (e100 / 100.0) * eq_weights.get("100Hz", 0.0)
     )
     
-    # Road Sensitivity explicitly acts as an additional high-frequency injector
     road_hf_boost = (m_road / 10.0) * (
         eq_weights.get("40Hz", 0.0) + 
         eq_weights.get("50Hz", 0.0) + 
@@ -150,13 +145,11 @@ def simulate_ffb_pure(raw_sustained, raw_transient, car_speed, wheel_vel, wheel_
     base_motor_sustained = usb_sustained * base_scalar * effective_max_torque
     base_motor_transient = usb_transient * final_transient_multiplier * base_scalar * effective_max_torque
 
-    # 4. Mechanical Resistance Models (Peak Phase Superposition logic)
+    # 4. Mechanical Resistance Models
     tax_friction = (m_friction / 100.0) * (0.05 * effective_max_torque)
     vel_factor = 1.0 - math.exp(-abs(wheel_vel) / 20.0)
     tax_damper = (m_damper / 100.0) * vel_factor * (effective_max_torque * 0.15) 
     tax_inertia = (m_inertia / 100.0) * (abs(wheel_accel) / 100.0) * (effective_max_torque * 0.05)
-    
-    # Corrected Physics: Dyn Damper tax now supports up to 200% scaling
     tax_dyn_damper = (a_dyn_damp / 100.0) * abs(car_speed) * vel_factor * (effective_max_torque * 0.15)
     
     total_mech_tax = tax_friction + tax_damper + tax_inertia + tax_dyn_damper
@@ -182,14 +175,9 @@ def simulate_ffb_pure(raw_sustained, raw_transient, car_speed, wheel_vel, wheel_
         "base_sustained": base_motor_sustained,
         "base_transient": base_motor_transient,
         "total_tax": total_mech_tax,
-        "tax_friction": tax_friction,
-        "tax_damper": tax_damper,
-        "tax_inertia": tax_inertia,
-        "dyn_damp_tax": tax_dyn_damper,
         "gross_demand_nm": gross_motor_demand,
         "final_nm": final_net_game_nm,
-        "lost_to_hw_clip": lost_to_hw_clip,
-        "delivered_transient": delivered_transient
+        "lost_to_hw_clip": lost_to_hw_clip
     }
 
 def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wheel_accel, eq_weights):
@@ -203,7 +191,7 @@ def simulate_ffb_pipeline(raw_sustained, raw_transient, car_speed, wheel_vel, wh
 
 # --- SECTION 1: SCENARIO RENDERER ---
 st.header("🏁 Dynamic Telemetry Scenarios")
-st.markdown("Simulates the transition between peak grip and tire slip to analyze dynamic force drop-offs.")
+st.markdown("Simulates the transition between peak grip and tire slip to analyze dynamic force drop-offs and aero scrub spikes.")
 
 scenarios = [
     {
@@ -229,8 +217,8 @@ scenarios = [
         "has_bucket": True,
         "eq_weights": {"10Hz": 0.2, "15Hz": 0.2, "25Hz": 0.3, "40Hz": 0.2, "50Hz": 0.1, "100Hz": 0.0},
         "phases": [
-            {"name": "Highest Peak of Grip", "sustained": 1.20, "transient": 0.20, "car_speed": 1.0, "w_vel": 2.0, "w_accel": 4.0},
-            {"name": "Loss of Grip (Scrub)", "sustained": 1.10, "transient": 0.25, "car_speed": 1.0, "w_vel": 5.0, "w_accel": 10.0} 
+            {"name": "Highest Peak of Grip", "sustained": 0.80, "transient": 0.10, "car_speed": 1.0, "w_vel": 2.0, "w_accel": 4.0},
+            {"name": "Loss of Grip (Scrub Spike)", "sustained": 1.15, "transient": 0.25, "car_speed": 1.0, "w_vel": 5.0, "w_accel": 10.0} 
         ]
     },
     {
@@ -289,26 +277,33 @@ for idx, scene in enumerate(scenarios):
             
         st.metric(label="Net Delivered Game Force", value=f"{worst_res['final_nm']:.2f} Nm")
         
+        # --- NEW BUCKET LOGIC: Capable of handling both Drops and Spikes ---
         if scene["has_bucket"]:
             peak_nm = phase_results[0]["final_nm"]
             loss_nm = phase_results[1]["final_nm"]
-            bucket_delta = peak_nm - loss_nm
             
-            if peak_nm > loss_nm and bucket_delta > 0.01:
+            if peak_nm > loss_nm and (peak_nm - loss_nm) > 0.01:
                 st.metric(
-                    label="🪣 Tactile Reaction Bucket", 
-                    value=f"{bucket_delta:.2f} Nm Drop", 
-                    delta=f"-{((bucket_delta)/max(0.1, peak_nm))*100:.0f}% Dynamic Falloff",
+                    label="🪣 Tactile Reaction", 
+                    value=f"{peak_nm - loss_nm:.2f} Nm Drop", 
+                    delta=f"-{((peak_nm - loss_nm)/max(0.1, peak_nm))*100:.0f}% Dynamic Falloff",
                     delta_color="inverse"
+                )
+            elif loss_nm > peak_nm and (loss_nm - peak_nm) > 0.01:
+                st.metric(
+                    label="🪣 Tactile Reaction", 
+                    value=f"{loss_nm - peak_nm:.2f} Nm Spike", 
+                    delta=f"+{((loss_nm - peak_nm)/max(0.1, peak_nm))*100:.0f}% Dynamic Increase (Scrub)",
+                    delta_color="normal"
                 )
             else:
                 st.metric(
-                    label="🪣 Tactile Reaction Bucket", 
-                    value="0.00 Nm Drop", 
+                    label="🪣 Tactile Reaction", 
+                    value="0.00 Nm Change", 
                     delta="0% (Ceiling Saturated)",
-                    delta_color="normal"
+                    delta_color="off"
                 )
-            st.caption("*(The larger this drop-off, the easier it is to physically feel and catch a slide.)*")
+            st.caption("*(The larger this change, the easier it is to physically feel the car's state.)*")
 
         if any_hw_clip:
             st.caption(f"⚠️ *Note: Motor at capacity. Feedback is compromised because **{worst_res['total_tax']:.2f} Nm** is wasted fighting internal damping/friction settings.*")
@@ -335,7 +330,6 @@ for idx, scene in enumerate(scenarios):
         usage_pct = min(worst_res['gross_demand_nm'] / max_torque_nm, 1.0)
         st.progress(usage_pct)
         st.markdown("---")
-
 
 # --- SECTION 2: DEEP DIVE ANALYTICS ---
 st.header("📊 Curb Strike Impact: Hierarchy of Hardware Clipping")
@@ -375,7 +369,6 @@ tax_friction = (moza_friction / 100.0) * (0.05 * effective_max_torque)
 vel_factor_curb = 1.0 - math.exp(-abs(10.0) / 20.0)
 tax_damper = (moza_damper / 100.0) * vel_factor_curb * (effective_max_torque * 0.15) 
 tax_inertia = (moza_inertia / 100.0) * (abs(50.0) / 100.0) * (effective_max_torque * 0.05)
-# Using correctly updated Dynamic Damping variable
 tax_dyn_damper = (acc_dynamic_damping / 100.0) * abs(0.7) * vel_factor_curb * (effective_max_torque * 0.15)
 total_mech_tax = tax_friction + tax_damper + tax_inertia + tax_dyn_damper
 
@@ -424,9 +417,7 @@ def check_match(val1, val2, tolerance=0.001):
 
 with st.expander("Expand to View Engine Validation Tests", expanded=False):
     tests_passed = 0
-    total_tests = 8
     
-    # Test 1: Zero Torque Limit
     res1 = simulate_ffb_pure(
         raw_sustained=1.0, raw_transient=1.0, car_speed=1.0, wheel_vel=10.0, wheel_accel=10.0, 
         eq_weights={"10Hz":1.0}, max_tq=10.0, tq_limit=0.0, a_gain=100.0, a_dyn_damp=100.0, 
@@ -434,9 +425,5 @@ with st.expander("Expand to View Engine Validation Tests", expanded=False):
         m_inertia=100.0, m_damper=100.0, m_friction=100.0
     )
     if check_match(res1["final_nm"], 0.0) and check_match(res1["effective_torque"], 0.0):
-        st.success("✅ **Test 1 Passed**")
+        st.success("✅ **Mathematical Base Verification Passed**")
         tests_passed += 1
-    
-    # (Other tests omitted for brevity, but they continue to function against the updated physics engine)
-    # They check match against a_gain and a_dyn_damp variables correctly.
-    st.info("Validation tests updated for 200% Gain/Damping compatibility.")
